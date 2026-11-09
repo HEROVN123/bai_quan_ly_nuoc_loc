@@ -1,8 +1,331 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+
+const API_URL = "http://localhost:3000";
+
+interface Order {
+  id: number;
+  code: string;
+  customer: string;
+  phone: string;
+  product: string;
+  quantity: number;
+  total: number;
+  date: string;
+  status: string;
+  createdAt?: string;
+}
+
+interface RevenueDay {
+  date: Date;
+  label: string;
+  total: number;
+}
 
 function Header() {
+  const navigate = useNavigate();
+
   const [showNotifications, setShowNotifications] = useState(false);
   const [showRevenue, setShowRevenue] = useState(false);
+
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loadingRevenue, setLoadingRevenue] = useState(false);
+  const [revenueError, setRevenueError] = useState("");
+
+  // Lấy ngày theo giờ địa phương
+  const getStartOfDay = (date: Date) => {
+    const result = new Date(date);
+    result.setHours(0, 0, 0, 0);
+    return result;
+  };
+
+  // Đọc ngày dd/MM/yyyy hoặc yyyy-MM-dd
+  const parseOrderDate = (value?: string): Date | null => {
+    if (!value) return null;
+
+    const text = String(value).trim();
+
+    // Định dạng dd/MM/yyyy
+    const vietnameseDate = text.match(
+      /^(\d{2})\/(\d{2})\/(\d{4})$/
+    );
+
+    if (vietnameseDate) {
+      const day = Number(vietnameseDate[1]);
+      const month = Number(vietnameseDate[2]);
+      const year = Number(vietnameseDate[3]);
+
+      const date = new Date(year, month - 1, day);
+
+      if (
+        date.getFullYear() === year &&
+        date.getMonth() === month - 1 &&
+        date.getDate() === day
+      ) {
+        return date;
+      }
+
+      return null;
+    }
+
+    // Định dạng yyyy-MM-dd hoặc ISO datetime
+    const isoDate = text.match(
+      /^(\d{4})-(\d{2})-(\d{2})/
+    );
+
+    if (isoDate) {
+      const year = Number(isoDate[1]);
+      const month = Number(isoDate[2]);
+      const day = Number(isoDate[3]);
+
+      const date = new Date(year, month - 1, day);
+
+      if (
+        date.getFullYear() === year &&
+        date.getMonth() === month - 1 &&
+        date.getDate() === day
+      ) {
+        return date;
+      }
+
+      return null;
+    }
+
+    return null;
+  };
+
+  // Lấy ngày đặt hàng, nếu không có thì dùng createdAt
+  const getOrderDate = (order: Order): Date | null => {
+    return (
+      parseOrderDate(order.date) ||
+      parseOrderDate(order.createdAt)
+    );
+  };
+
+  // Kiểm tra đơn hàng đã hoàn thành
+  const isCompleted = (order: Order) => {
+    return order.status?.trim().toLowerCase() === "hoàn thành";
+  };
+
+  // Định dạng tiền VNĐ
+  const formatCurrency = (value: number) => {
+    return new Intl.NumberFormat("vi-VN", {
+      style: "currency",
+      currency: "VND",
+      maximumFractionDigits: 0,
+    }).format(value);
+  };
+
+  // Định dạng số tiền ngắn gọn trên biểu đồ
+  const formatShortCurrency = (value: number) => {
+    if (value >= 1_000_000) {
+      return `${(value / 1_000_000).toFixed(1)}M`;
+    }
+
+    if (value >= 1_000) {
+      return `${(value / 1_000).toFixed(0)}K`;
+    }
+
+    return `${value.toLocaleString("vi-VN")}`;
+  };
+
+  // Lấy dữ liệu doanh thu từ API
+  useEffect(() => {
+    if (!showRevenue) return;
+
+    const controller = new AbortController();
+
+    const fetchOrders = async () => {
+      try {
+        setLoadingRevenue(true);
+        setRevenueError("");
+
+        const token = localStorage.getItem("accessToken");
+
+        const response = await fetch(`${API_URL}/orders`, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token
+              ? { Authorization: `Bearer ${token}` }
+              : {}),
+          },
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error("Không thể tải dữ liệu doanh thu.");
+        }
+
+        const data = await response.json();
+
+        if (!Array.isArray(data)) {
+          throw new Error("Dữ liệu đơn hàng không hợp lệ.");
+        }
+
+        setOrders(data);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          return;
+        }
+
+        setRevenueError(
+          error instanceof Error
+            ? error.message
+            : "Đã xảy ra lỗi khi tải doanh thu."
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoadingRevenue(false);
+        }
+      }
+    };
+
+    fetchOrders();
+
+    return () => {
+      controller.abort();
+    };
+  }, [showRevenue]);
+
+  // Tính toán doanh thu
+  const revenueData = useMemo(() => {
+    const today = getStartOfDay(new Date());
+
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    // Đầu tuần là thứ Hai
+    const startOfWeek = new Date(today);
+    const dayOfWeek = today.getDay();
+
+    startOfWeek.setDate(
+      today.getDate() - (dayOfWeek === 0 ? 6 : dayOfWeek - 1)
+    );
+
+    const startOfMonth = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      1
+    );
+
+    const completedOrders = orders
+      .filter(isCompleted)
+      .map((order) => ({
+        ...order,
+        parsedDate: getOrderDate(order),
+        amount: Number(order.total) || 0,
+      }))
+      .filter((order) => order.parsedDate !== null);
+
+    const getTotalByDate = (targetDate: Date) => {
+      return completedOrders
+        .filter((order) => {
+          return (
+            getStartOfDay(order.parsedDate!).getTime() ===
+            targetDate.getTime()
+          );
+        })
+        .reduce((sum, order) => sum + order.amount, 0);
+    };
+
+    const todayOrders = completedOrders.filter(
+      (order) =>
+        getStartOfDay(order.parsedDate!).getTime() === today.getTime()
+    );
+
+    const todayRevenue = todayOrders.reduce(
+      (sum, order) => sum + order.amount,
+      0
+    );
+
+    const yesterdayRevenue = getTotalByDate(yesterday);
+
+    const weekRevenue = completedOrders
+      .filter((order) => {
+        const date = getStartOfDay(order.parsedDate!);
+
+        return (
+          date >= startOfWeek &&
+          date <= today
+        );
+      })
+      .reduce((sum, order) => sum + order.amount, 0);
+
+    const monthRevenue = completedOrders
+      .filter((order) => {
+        const date = getStartOfDay(order.parsedDate!);
+
+        return (
+          date >= startOfMonth &&
+          date <= today
+        );
+      })
+      .reduce((sum, order) => sum + order.amount, 0);
+
+    const averageOrder =
+      todayOrders.length > 0
+        ? todayRevenue / todayOrders.length
+        : 0;
+
+    // Tính tỷ lệ tăng trưởng so với hôm qua
+    let growthText = "0%";
+
+    if (yesterdayRevenue === 0 && todayRevenue > 0) {
+      growthText = "Mới";
+    } else if (yesterdayRevenue > 0) {
+      const growth =
+        ((todayRevenue - yesterdayRevenue) / yesterdayRevenue) * 100;
+
+      growthText = `${growth > 0 ? "+" : ""}${growth.toFixed(1)}%`;
+    }
+
+    // Dữ liệu biểu đồ 7 ngày gần nhất
+    const chartDays: RevenueDay[] = [];
+
+    for (let i = 6; i >= 0; i--) {
+      const date = new Date(today);
+      date.setDate(today.getDate() - i);
+
+      const weekdayLabels = [
+        "CN",
+        "T2",
+        "T3",
+        "T4",
+        "T5",
+        "T6",
+        "T7",
+      ];
+
+      chartDays.push({
+        date,
+        label: weekdayLabels[date.getDay()],
+        total: getTotalByDate(date),
+      });
+    }
+
+    const chartTotal = chartDays.reduce(
+      (sum, item) => sum + item.total,
+      0
+    );
+
+    const maxRevenue = Math.max(
+      ...chartDays.map((item) => item.total),
+      1
+    );
+
+    return {
+      todayRevenue,
+      weekRevenue,
+      monthRevenue,
+      todayOrderCount: todayOrders.length,
+      averageOrder,
+      growthText,
+      chartDays,
+      chartTotal,
+      maxRevenue,
+    };
+  }, [orders]);
 
   return (
     <header className="top-header">
@@ -55,9 +378,7 @@ function Header() {
                 <div>
                   <h3>Thông báo</h3>
 
-                  <span>
-                    3 thông báo mới
-                  </span>
+                  <span>3 thông báo mới</span>
                 </div>
 
                 <button
@@ -76,13 +397,10 @@ function Header() {
                   </div>
 
                   <div>
-                    <strong>
-                      Kho hàng sắp hết
-                    </strong>
+                    <strong>Kho hàng sắp hết</strong>
 
                     <p>
-                      2 sản phẩm đang dưới mức tồn
-                      tối thiểu.
+                      2 sản phẩm đang dưới mức tồn tối thiểu.
                     </p>
 
                     <span>5 phút trước</span>
@@ -95,9 +413,7 @@ function Header() {
                   </div>
 
                   <div>
-                    <strong>
-                      Có đơn hàng mới
-                    </strong>
+                    <strong>Có đơn hàng mới</strong>
 
                     <p>
                       Đơn hàng #DH0012 đang chờ xử lý.
@@ -113,13 +429,10 @@ function Header() {
                   </div>
 
                   <div>
-                    <strong>
-                      Hệ thống hoạt động tốt
-                    </strong>
+                    <strong>Hệ thống hoạt động tốt</strong>
 
                     <p>
-                      Dữ liệu đã được đồng bộ thành
-                      công.
+                      Dữ liệu đã được đồng bộ thành công.
                     </p>
 
                     <span>1 giờ trước</span>
@@ -163,7 +476,7 @@ function Header() {
                   : "revenue-chevron"
               }
             >
-             ⌄
+              ⌄
             </span>
           </button>
 
@@ -193,137 +506,151 @@ function Header() {
                 </button>
               </div>
 
-              {/* MAIN REVENUE */}
-              <div className="revenue-main-card">
-                <div className="revenue-main-icon">
-                  ↗
+              {loadingRevenue ? (
+                <div className="revenue-loading">
+                  Đang tải dữ liệu doanh thu...
                 </div>
-
-                <div className="revenue-main-info">
-                  <span>
-                    Doanh thu hôm nay
-                  </span>
-
-                  <strong>
-                    12.8M đ
-                  </strong>
+              ) : revenueError ? (
+                <div className="revenue-error">
+                  {revenueError}
+                  <button
+                    onClick={() => {
+                      setShowRevenue(false);
+                      setTimeout(() => setShowRevenue(true), 0);
+                    }}
+                  >
+                    Thử lại
+                  </button>
                 </div>
+              ) : (
+                <>
+                  {/* MAIN REVENUE */}
+                  <div className="revenue-main-card">
+                    <div className="revenue-main-icon">
+                      ↗
+                    </div>
 
-                <div className="revenue-growth">
-                  +8.4%
-                </div>
-              </div>
+                    <div className="revenue-main-info">
+                      <span>
+                        Doanh thu hôm nay
+                      </span>
 
-              {/* STATS */}
-              <div className="revenue-stats">
-                <div className="revenue-stat">
-                  <span>Tuần này</span>
-                  <strong>78.6M đ</strong>
-                </div>
+                      <strong>
+                        {formatCurrency(revenueData.todayRevenue)}
+                      </strong>
+                    </div>
 
-                <div className="revenue-stat">
-                  <span>Tháng này</span>
-                  <strong>286.4M đ</strong>
-                </div>
+                    <div className="revenue-growth">
+                      {revenueData.growthText}
+                    </div>
+                  </div>
 
-                <div className="revenue-stat">
-                  <span>Đơn hôm nay</span>
-                  <strong>42</strong>
-                </div>
+                  {/* STATS */}
+                  <div className="revenue-stats">
+                    <div className="revenue-stat">
+                      <span>Tuần này</span>
 
-                <div className="revenue-stat">
-                  <span>Giá trị TB</span>
-                  <strong>305K đ</strong>
-                </div>
-              </div>
+                      <strong>
+                        {formatShortCurrency(revenueData.weekRevenue)} đ
+                      </strong>
+                    </div>
 
-              {/* MINI CHART */}
-              <div className="revenue-chart">
-                <div className="revenue-chart-header">
-                  <div>
-                    <strong>
-                      Hiệu suất 7 ngày
-                    </strong>
+                    <div className="revenue-stat">
+                      <span>Tháng này</span>
 
+                      <strong>
+                        {formatShortCurrency(revenueData.monthRevenue)} đ
+                      </strong>
+                    </div>
+
+                    <div className="revenue-stat">
+                      <span>Đơn hôm nay</span>
+
+                      <strong>
+                        {revenueData.todayOrderCount}
+                      </strong>
+                    </div>
+
+                    <div className="revenue-stat">
+                      <span>Giá trị TB</span>
+
+                      <strong>
+                        {formatShortCurrency(revenueData.averageOrder)} đ
+                      </strong>
+                    </div>
+                  </div>
+
+                  {/* MINI CHART */}
+                  <div className="revenue-chart">
+                    <div className="revenue-chart-header">
+                      <div>
+                        <strong>
+                          Hiệu suất 7 ngày
+                        </strong>
+
+                        <span>
+                          Doanh thu theo ngày
+                        </span>
+                      </div>
+
+                      <span className="revenue-chart-total">
+                        {formatShortCurrency(revenueData.chartTotal)} đ
+                      </span>
+                    </div>
+
+                    <div className="revenue-bars">
+                      {revenueData.chartDays.map((item, index) => {
+                        const height =
+                          item.total > 0
+                            ? Math.max(
+                                (item.total / revenueData.maxRevenue) * 100,
+                                5
+                              )
+                            : 0;
+
+                        const isToday = index === 6;
+
+                        return (
+                          <div
+                            className={
+                              isToday
+                                ? "revenue-bar-item today"
+                                : "revenue-bar-item"
+                            }
+                            key={item.date.toISOString()}
+                            title={`${item.label}: ${formatCurrency(item.total)}`}
+                          >
+                            <div
+                              className="revenue-bar"
+                              style={{
+                                height: `${height}%`,
+                              }}
+                            ></div>
+
+                            <span>{item.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* FOOTER */}
+                  <div className="revenue-panel-footer">
                     <span>
-                      Doanh thu theo ngày
+                      Dữ liệu từ đơn hàng đã hoàn thành
                     </span>
+
+                    <button
+                      onClick={() => {
+                        setShowRevenue(false);
+                        navigate("/orders");
+                      }}
+                    >
+                      Xem chi tiết →
+                    </button>
                   </div>
-
-                  <span className="revenue-chart-total">
-                    78.6M
-                  </span>
-                </div>
-
-                <div className="revenue-bars">
-                  <div className="revenue-bar-item">
-                    <div
-                      className="revenue-bar"
-                      style={{ height: "45%" }}
-                    ></div>
-                    <span>T2</span>
-                  </div>
-
-                  <div className="revenue-bar-item">
-                    <div
-                      className="revenue-bar"
-                      style={{ height: "62%" }}
-                    ></div>
-                    <span>T3</span>
-                  </div>
-
-                  <div className="revenue-bar-item">
-                    <div
-                      className="revenue-bar"
-                      style={{ height: "50%" }}
-                    ></div>
-                    <span>T4</span>
-                  </div>
-
-                  <div className="revenue-bar-item">
-                    <div
-                      className="revenue-bar"
-                      style={{ height: "75%" }}
-                    ></div>
-                    <span>T5</span>
-                  </div>
-
-                  <div className="revenue-bar-item">
-                    <div
-                      className="revenue-bar"
-                      style={{ height: "66%" }}
-                    ></div>
-                    <span>T6</span>
-                  </div>
-
-                  <div className="revenue-bar-item">
-                    <div
-                      className="revenue-bar"
-                      style={{ height: "88%" }}
-                    ></div>
-                    <span>T7</span>
-                  </div>
-
-                  <div className="revenue-bar-item today">
-                    <div
-                      className="revenue-bar"
-                      style={{ height: "100%" }}
-                    ></div>
-                    <span>CN</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* FOOTER */}
-              <div className="revenue-panel-footer">
-                <span>
-                  Cập nhật lần cuối: hôm nay, 09:00
-                </span>
-
-                <button>
-                  Xem chi tiết →
-                </button>
-              </div>
+                </>
+              )}
             </div>
           )}
         </div>

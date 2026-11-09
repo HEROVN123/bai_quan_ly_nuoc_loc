@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 
 interface Customer {
   id: number;
@@ -11,62 +12,57 @@ interface Customer {
   status: "Đang hoạt động" | "Ngừng hoạt động";
 }
 
-const initialCustomers: Customer[] = [
-  {
-    id: 1,
-    code: "KH001",
-    name: "Nguyễn Minh Anh",
-    phone: "0901234567",
-    email: "minhanh@gmail.com",
-    address: "Quận 1, TP. Hồ Chí Minh",
-    orders: 18,
-    status: "Đang hoạt động",
-  },
-  {
-    id: 2,
-    code: "KH002",
-    name: "Trần Hoàng Nam",
-    phone: "0912345678",
-    email: "hoangnam@gmail.com",
-    address: "Quận 3, TP. Hồ Chí Minh",
-    orders: 12,
-    status: "Đang hoạt động",
-  },
-  {
-    id: 3,
-    code: "KH003",
-    name: "Lê Thị Ngọc",
-    phone: "0923456789",
-    email: "lengoc@gmail.com",
-    address: "Quận 7, TP. Hồ Chí Minh",
-    orders: 25,
-    status: "Đang hoạt động",
-  },
-  {
-    id: 4,
-    code: "KH004",
-    name: "Phạm Quốc Huy",
-    phone: "0934567890",
-    email: "quochuy@gmail.com",
-    address: "Thủ Đức, TP. Hồ Chí Minh",
-    orders: 7,
-    status: "Ngừng hoạt động",
-  },
-  {
-    id: 5,
-    code: "KH005",
-    name: "Võ Thanh Thảo",
-    phone: "0945678901",
-    email: "thanhthao@gmail.com",
-    address: "Bình Thạnh, TP. Hồ Chí Minh",
-    orders: 31,
-    status: "Đang hoạt động",
-  },
-];
+interface ApiCustomer {
+  id: number;
+  code: string;
+  name: string;
+  phone: string;
+  email: string;
+  address: string | null;
+  isActive: boolean;
+}
+
+const API_URL = "http://localhost:3000";
+
+const getHeaders = () => {
+  const token = localStorage.getItem("accessToken");
+
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
+// Chuyển dữ liệu từ Backend sang giao diện Frontend
+const mapCustomer = (customer: ApiCustomer): Customer => ({
+  id: customer.id,
+  code: customer.code,
+  name: customer.name,
+  phone: customer.phone,
+  email: customer.email,
+  address: customer.address ?? "",
+  orders: 0,
+  status: customer.isActive
+    ? "Đang hoạt động"
+    : "Ngừng hoạt động",
+});
+
+// Đọc thông báo lỗi từ Backend
+const getErrorMessage = async (response: Response) => {
+  const data = await response.json().catch(() => null);
+
+  if (Array.isArray(data?.message)) {
+    return data.message.join(", ");
+  }
+
+  return data?.message || "Đã xảy ra lỗi. Vui lòng thử lại.";
+};
 
 function Customers() {
-  const [customers, setCustomers] =
-    useState<Customer[]>(initialCustomers);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState("");
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Tất cả");
@@ -84,6 +80,42 @@ function Customers() {
     status: "Đang hoạt động" as Customer["status"],
   });
 
+  // Lấy danh sách khách hàng từ SQL Server thông qua API
+  useEffect(() => {
+    const fetchCustomers = async () => {
+      try {
+        setLoading(true);
+        setLoadError("");
+
+        const response = await fetch(`${API_URL}/customers`, {
+          method: "GET",
+          headers: getHeaders(),
+        });
+
+        if (!response.ok) {
+          throw new Error(await getErrorMessage(response));
+        }
+
+        const data: ApiCustomer[] = await response.json();
+
+        setCustomers(data.map(mapCustomer));
+      } catch (error) {
+        console.error("Lỗi lấy danh sách khách hàng:", error);
+
+        setLoadError(
+          error instanceof Error
+            ? error.message
+            : "Không thể tải danh sách khách hàng."
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchCustomers();
+  }, []);
+
+  // Tìm kiếm và lọc khách hàng
   const filteredCustomers = useMemo(() => {
     return customers.filter((customer) => {
       const keyword = search.toLowerCase();
@@ -102,6 +134,7 @@ function Customers() {
     });
   }, [customers, search, statusFilter]);
 
+  // Thống kê
   const totalCustomers = customers.length;
 
   const activeCustomers = customers.filter(
@@ -117,6 +150,7 @@ function Customers() {
     0
   );
 
+  // Mở form thêm khách hàng
   const openAddModal = () => {
     setEditingCustomer(null);
 
@@ -132,6 +166,7 @@ function Customers() {
     setShowModal(true);
   };
 
+  // Mở form chỉnh sửa
   const openEditModal = (customer: Customer) => {
     setEditingCustomer(customer);
 
@@ -147,12 +182,16 @@ function Customers() {
     setShowModal(true);
   };
 
+  // Đóng form
   const closeModal = () => {
+    if (saving) return;
+
     setShowModal(false);
     setEditingCustomer(null);
   };
 
-  const handleSave = () => {
+  // Thêm hoặc cập nhật khách hàng qua API
+  const handleSave = async () => {
     if (
       !form.code.trim() ||
       !form.name.trim() ||
@@ -163,54 +202,123 @@ function Customers() {
       return;
     }
 
-    if (editingCustomer) {
-      setCustomers((current) =>
-        current.map((customer) =>
-          customer.id === editingCustomer.id
-            ? {
-                ...customer,
-                code: form.code,
-                name: form.name,
-                phone: form.phone,
-                email: form.email,
-                address: form.address,
-                status: form.status,
-              }
-            : customer
-        )
-      );
-
-      alert("Cập nhật khách hàng thành công!");
-    } else {
-      const newCustomer: Customer = {
-        id: Date.now(),
-        code: form.code,
-        name: form.name,
-        phone: form.phone,
-        email: form.email,
-        address: form.address,
-        orders: 0,
-        status: form.status,
-      };
-
-      setCustomers((current) => [...current, newCustomer]);
-
-      alert("Thêm khách hàng thành công!");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
+      alert("Email không hợp lệ.");
+      return;
     }
 
-    closeModal();
+    const customerData = {
+      code: form.code.trim(),
+      name: form.name.trim(),
+      phone: form.phone.trim(),
+      email: form.email.trim(),
+      address: form.address.trim() || null,
+      isActive: form.status === "Đang hoạt động",
+    };
+
+    try {
+      setSaving(true);
+
+      if (editingCustomer) {
+        // Cập nhật khách hàng
+        const response = await fetch(
+          `${API_URL}/customers/${editingCustomer.id}`,
+          {
+            method: "PATCH",
+            headers: getHeaders(),
+            body: JSON.stringify(customerData),
+          }
+        );
+
+        if (!response.ok) {
+          throw new Error(await getErrorMessage(response));
+        }
+
+        const updatedData: ApiCustomer = await response.json();
+        const updatedCustomer = mapCustomer(updatedData);
+
+        setCustomers((current) =>
+          current.map((customer) =>
+            customer.id === editingCustomer.id
+              ? updatedCustomer
+              : customer
+          )
+        );
+
+        alert("Cập nhật khách hàng thành công!");
+      } else {
+        // Thêm khách hàng mới
+        const response = await fetch(`${API_URL}/customers`, {
+          method: "POST",
+          headers: getHeaders(),
+          body: JSON.stringify(customerData),
+        });
+
+        if (!response.ok) {
+          throw new Error(await getErrorMessage(response));
+        }
+
+        const newData: ApiCustomer = await response.json();
+        const newCustomer = mapCustomer(newData);
+
+        setCustomers((current) => [
+          newCustomer,
+          ...current,
+        ]);
+
+        alert("Thêm khách hàng thành công!");
+      }
+
+      setShowModal(false);
+      setEditingCustomer(null);
+    } catch (error) {
+      console.error("Lỗi lưu khách hàng:", error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Không thể lưu khách hàng."
+      );
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const handleDelete = (customer: Customer) => {
+  // Xóa khách hàng qua API
+  const handleDelete = async (customer: Customer) => {
     const confirmed = window.confirm(
       `Bạn có chắc chắn muốn xóa khách hàng "${customer.name}" không?`
     );
 
     if (!confirmed) return;
 
-    setCustomers((current) =>
-      current.filter((item) => item.id !== customer.id)
-    );
+    try {
+      const response = await fetch(
+        `${API_URL}/customers/${customer.id}`,
+        {
+          method: "DELETE",
+          headers: getHeaders(),
+        }
+      );
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setCustomers((current) =>
+        current.filter((item) => item.id !== customer.id)
+      );
+
+      alert("Xóa khách hàng thành công!");
+    } catch (error) {
+      console.error("Lỗi xóa khách hàng:", error);
+
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Không thể xóa khách hàng."
+      );
+    }
   };
 
   return (
@@ -315,9 +423,7 @@ function Customers() {
 
             <select
               value={statusFilter}
-              onChange={(e) =>
-                setStatusFilter(e.target.value)
-              }
+              onChange={(e) => setStatusFilter(e.target.value)}
               className="customers-filter-select"
             >
               <option>Tất cả</option>
@@ -342,7 +448,22 @@ function Customers() {
             </thead>
 
             <tbody>
-              {filteredCustomers.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="customers-empty">
+                    Đang tải danh sách khách hàng...
+                  </td>
+                </tr>
+              ) : loadError ? (
+                <tr>
+                  <td colSpan={7} className="customers-empty">
+                    <div>
+                      <strong>Không thể tải khách hàng</strong>
+                      <p>{loadError}</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredCustomers.length > 0 ? (
                 filteredCustomers.map((customer) => (
                   <tr key={customer.id}>
                     <td>
@@ -373,7 +494,7 @@ function Customers() {
 
                     <td>
                       <span className="customer-address">
-                        {customer.address}
+                        {customer.address || "Chưa cập nhật"}
                       </span>
                     </td>
 
@@ -386,8 +507,7 @@ function Customers() {
                     <td>
                       <span
                         className={`customer-status ${
-                          customer.status ===
-                          "Đang hoạt động"
+                          customer.status === "Đang hoạt động"
                             ? "active"
                             : "inactive"
                         }`}
@@ -401,9 +521,7 @@ function Customers() {
                       <div className="customer-actions">
                         <button
                           className="customer-edit-button"
-                          onClick={() =>
-                            openEditModal(customer)
-                          }
+                          onClick={() => openEditModal(customer)}
                           title="Chỉnh sửa"
                         >
                           ✎
@@ -411,9 +529,7 @@ function Customers() {
 
                         <button
                           className="customer-delete-button"
-                          onClick={() =>
-                            handleDelete(customer)
-                          }
+                          onClick={() => handleDelete(customer)}
                           title="Xóa"
                         >
                           ×
@@ -424,10 +540,7 @@ function Customers() {
                 ))
               ) : (
                 <tr>
-                  <td
-                    colSpan={7}
-                    className="customers-empty"
-                  >
+                  <td colSpan={7} className="customers-empty">
                     <div>
                       <span>⌕</span>
 
@@ -482,6 +595,7 @@ function Customers() {
               <button
                 className="customer-modal-close"
                 onClick={closeModal}
+                disabled={saving}
               >
                 ×
               </button>
@@ -588,8 +702,7 @@ function Customers() {
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      status:
-                        e.target.value as Customer["status"],
+                      status: e.target.value as Customer["status"],
                     })
                   }
                 >
@@ -603,6 +716,7 @@ function Customers() {
               <button
                 className="customer-cancel-button"
                 onClick={closeModal}
+                disabled={saving}
               >
                 Hủy
               </button>
@@ -610,10 +724,13 @@ function Customers() {
               <button
                 className="customer-save-button"
                 onClick={handleSave}
+                disabled={saving}
               >
-                {editingCustomer
-                  ? "Lưu thay đổi"
-                  : "Thêm khách hàng"}
+                {saving
+                  ? "Đang lưu..."
+                  : editingCustomer
+                    ? "Lưu thay đổi"
+                    : "Thêm khách hàng"}
               </button>
             </div>
           </div>

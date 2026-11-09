@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 
 interface Order {
   id: number;
@@ -16,75 +17,19 @@ interface Order {
     | "Đã hủy";
 }
 
-const initialOrders: Order[] = [
-  {
-    id: 1,
-    code: "DH0012",
-    customer: "Công ty TNHH Minh Phát",
-    phone: "0901234567",
-    product: "Nước tinh khiết 20L",
-    quantity: 10,
-    total: 900000,
-    date: "31/10/2026",
-    status: "Đang giao",
-  },
-  {
-    id: 2,
-    code: "DH0011",
-    customer: "Nguyễn Thị Lan",
-    phone: "0912345678",
-    product: "Nước khoáng 500ml",
-    quantity: 5,
-    total: 600000,
-    date: "31/10/2026",
-    status: "Đang xử lý",
-  },
-  {
-    id: 3,
-    code: "DH0010",
-    customer: "Trường Cao đẳng Viễn Đông",
-    phone: "0923456789",
-    product: "Nước tinh khiết 20L",
-    quantity: 20,
-    total: 1800000,
-    date: "30/10/2026",
-    status: "Hoàn thành",
-  },
-  {
-    id: 4,
-    code: "DH0009",
-    customer: "Cửa hàng An Khang",
-    phone: "0934567890",
-    product: "Nước khoáng 1.5L",
-    quantity: 12,
-    total: 960000,
-    date: "30/10/2026",
-    status: "Hoàn thành",
-  },
-  {
-    id: 5,
-    code: "DH0008",
-    customer: "Phạm Văn Nam",
-    phone: "0945678901",
-    product: "Nước ion kiềm 500ml",
-    quantity: 3,
-    total: 450000,
-    date: "29/10/2026",
-    status: "Đã hủy",
-  },
-];
+const API_URL = "http://localhost:3000/orders";
 
 function Orders() {
-  const [orders, setOrders] =
-    useState<Order[]>(initialOrders);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] =
-    useState("Tất cả");
+  const [statusFilter, setStatusFilter] = useState("Tất cả");
 
   const [showModal, setShowModal] = useState(false);
-  const [editingOrder, setEditingOrder] =
-    useState<Order | null>(null);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
 
   const [form, setForm] = useState({
     code: "",
@@ -96,6 +41,79 @@ function Orders() {
     date: "",
     status: "Đang xử lý" as Order["status"],
   });
+
+  // Header gửi token nếu người dùng đã đăng nhập
+  const getHeaders = () => {
+    const token = localStorage.getItem("accessToken");
+
+    return {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
+
+  // Xử lý lỗi trả về từ Backend
+  const getErrorMessage = async (response: Response) => {
+    try {
+      const data = await response.json();
+
+      if (Array.isArray(data.message)) {
+        return data.message.join("\n");
+      }
+
+      return data.message || "Đã xảy ra lỗi!";
+    } catch {
+      return "Không thể kết nối đến máy chủ!";
+    }
+  };
+
+  // Chuẩn hóa dữ liệu nhận từ SQL Server
+  const normalizeOrder = (item: any): Order => ({
+    id: Number(item.id),
+    code: item.code,
+    customer: item.customer,
+    phone: item.phone,
+    product: item.product,
+    quantity: Number(item.quantity),
+    total: Number(item.total),
+    date: item.date,
+    status: item.status,
+  });
+
+  // Lấy danh sách đơn hàng
+  const fetchOrders = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const response = await fetch(API_URL, {
+        method: "GET",
+        headers: getHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const data = await response.json();
+
+      setOrders(data.map(normalizeOrder));
+    } catch (err) {
+      console.error("Lỗi lấy đơn hàng:", err);
+
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Không thể tải danh sách đơn hàng."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchOrders();
+  }, []);
 
   const filteredOrders = useMemo(() => {
     return orders.filter((order) => {
@@ -144,7 +162,7 @@ function Orders() {
       product: "Nước tinh khiết 20L",
       quantity: "",
       total: "",
-      date: "",
+      date: new Date().toLocaleDateString("vi-VN"),
       status: "Đang xử lý",
     });
 
@@ -169,17 +187,21 @@ function Orders() {
   };
 
   const closeModal = () => {
+    if (saving) return;
+
     setShowModal(false);
     setEditingOrder(null);
   };
 
-  const handleSave = () => {
+  // Thêm hoặc cập nhật đơn hàng
+  const handleSave = async () => {
     if (
       !form.code.trim() ||
       !form.customer.trim() ||
       !form.phone.trim() ||
+      !form.product.trim() ||
       !form.quantity ||
-      !form.total ||
+      form.total === "" ||
       !form.date.trim()
     ) {
       alert("Vui lòng nhập đầy đủ thông tin đơn hàng.");
@@ -189,67 +211,100 @@ function Orders() {
     const quantity = Number(form.quantity);
     const total = Number(form.total);
 
-    if (quantity <= 0 || total < 0) {
-      alert("Số lượng phải lớn hơn 0 và tổng tiền không được âm.");
+    if (
+      !Number.isInteger(quantity) ||
+      quantity <= 0 ||
+      !Number.isFinite(total) ||
+      total < 0
+    ) {
+      alert("Số lượng phải là số nguyên lớn hơn 0 và tổng tiền không được âm.");
       return;
     }
 
-    if (editingOrder) {
-      setOrders((current) =>
-        current.map((order) =>
-          order.id === editingOrder.id
-            ? {
-                ...order,
-                code: form.code,
-                customer: form.customer,
-                phone: form.phone,
-                product: form.product,
-                quantity,
-                total,
-                date: form.date,
-                status: form.status,
-              }
-            : order
-        )
+    const orderData = {
+      code: form.code.trim(),
+      customer: form.customer.trim(),
+      phone: form.phone.trim(),
+      product: form.product,
+      quantity,
+      total,
+      date: form.date.trim(),
+      status: form.status,
+    };
+
+    try {
+      setSaving(true);
+
+      const isEditing = Boolean(editingOrder);
+
+      const response = await fetch(
+        isEditing
+          ? `${API_URL}/${editingOrder!.id}`
+          : API_URL,
+        {
+          method: isEditing ? "PATCH" : "POST",
+          headers: getHeaders(),
+          body: JSON.stringify(orderData),
+        }
       );
 
-      alert("Cập nhật đơn hàng thành công!");
-    } else {
-      const newOrder: Order = {
-        id: Date.now(),
-        code: form.code,
-        customer: form.customer,
-        phone: form.phone,
-        product: form.product,
-        quantity,
-        total,
-        date: form.date,
-        status: form.status,
-      };
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
 
-      setOrders((current) => [
-        ...current,
-        newOrder,
-      ]);
+      alert(
+        isEditing
+          ? "Cập nhật đơn hàng thành công!"
+          : "Thêm đơn hàng thành công!"
+      );
 
-      alert("Thêm đơn hàng thành công!");
+      setShowModal(false);
+      setEditingOrder(null);
+
+      await fetchOrders();
+    } catch (err) {
+      console.error("Lỗi lưu đơn hàng:", err);
+
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Không thể lưu đơn hàng!"
+      );
+    } finally {
+      setSaving(false);
     }
-
-    closeModal();
   };
 
-  const handleDelete = (order: Order) => {
+  // Xóa đơn hàng
+  const handleDelete = async (order: Order) => {
     const confirmed = window.confirm(
       `Bạn có chắc chắn muốn xóa đơn hàng "${order.code}" không?`
     );
 
     if (!confirmed) return;
 
-    setOrders((current) =>
-      current.filter(
-        (item) => item.id !== order.id
-      )
-    );
+    try {
+      const response = await fetch(`${API_URL}/${order.id}`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      alert("Xóa đơn hàng thành công!");
+
+      await fetchOrders();
+    } catch (err) {
+      console.error("Lỗi xóa đơn hàng:", err);
+
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Không thể xóa đơn hàng!"
+      );
+    }
   };
 
   return (
@@ -285,9 +340,7 @@ function Orders() {
       {/* SUMMARY */}
       <div className="orders-summary">
         <div className="order-summary-card">
-          <div className="order-summary-icon cyan">
-            ▣
-          </div>
+          <div className="order-summary-icon cyan">▣</div>
 
           <div>
             <span>Tổng đơn hàng</span>
@@ -296,9 +349,7 @@ function Orders() {
         </div>
 
         <div className="order-summary-card">
-          <div className="order-summary-icon green">
-            ✓
-          </div>
+          <div className="order-summary-icon green">✓</div>
 
           <div>
             <span>Hoàn thành</span>
@@ -307,9 +358,7 @@ function Orders() {
         </div>
 
         <div className="order-summary-card">
-          <div className="order-summary-icon orange">
-            ◷
-          </div>
+          <div className="order-summary-icon orange">◷</div>
 
           <div>
             <span>Đang xử lý</span>
@@ -318,9 +367,7 @@ function Orders() {
         </div>
 
         <div className="order-summary-card">
-          <div className="order-summary-icon red">
-            ×
-          </div>
+          <div className="order-summary-icon red">×</div>
 
           <div>
             <span>Đã hủy</span>
@@ -336,8 +383,7 @@ function Orders() {
             <h2>Danh sách đơn hàng</h2>
 
             <p>
-              {filteredOrders.length} đơn hàng được
-              hiển thị
+              {filteredOrders.length} đơn hàng được hiển thị
             </p>
           </div>
 
@@ -349,17 +395,13 @@ function Orders() {
                 type="text"
                 placeholder="Tìm mã đơn, khách hàng..."
                 value={search}
-                onChange={(e) =>
-                  setSearch(e.target.value)
-                }
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
 
             <select
               value={statusFilter}
-              onChange={(e) =>
-                setStatusFilter(e.target.value)
-              }
+              onChange={(e) => setStatusFilter(e.target.value)}
               className="orders-filter-select"
             >
               <option>Tất cả</option>
@@ -387,7 +429,25 @@ function Orders() {
             </thead>
 
             <tbody>
-              {filteredOrders.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="orders-empty">
+                    Đang tải danh sách đơn hàng...
+                  </td>
+                </tr>
+              ) : error ? (
+                <tr>
+                  <td colSpan={8} className="orders-empty">
+                    <div>
+                      <strong>Không thể tải đơn hàng</strong>
+                      <p>{error}</p>
+                      <button onClick={fetchOrders}>
+                        Thử tải lại
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ) : filteredOrders.length > 0 ? (
                 filteredOrders.map((order) => (
                   <tr key={order.id}>
                     <td>
@@ -403,10 +463,7 @@ function Orders() {
                         </div>
 
                         <div>
-                          <strong>
-                            {order.customer}
-                          </strong>
-
+                          <strong>{order.customer}</strong>
                           <span>{order.phone}</span>
                         </div>
                       </div>
@@ -414,13 +471,8 @@ function Orders() {
 
                     <td>
                       <div className="order-product-cell">
-                        <div className="order-product-icon">
-                          💧
-                        </div>
-
-                        <span>
-                          {order.product}
-                        </span>
+                        <div className="order-product-icon">💧</div>
+                        <span>{order.product}</span>
                       </div>
                     </td>
 
@@ -445,14 +497,11 @@ function Orders() {
                     <td>
                       <span
                         className={`order-status ${
-                          order.status ===
-                          "Hoàn thành"
+                          order.status === "Hoàn thành"
                             ? "completed"
-                            : order.status ===
-                              "Đã hủy"
+                            : order.status === "Đã hủy"
                             ? "cancelled"
-                            : order.status ===
-                              "Đang giao"
+                            : order.status === "Đang giao"
                             ? "shipping"
                             : "processing"
                         }`}
@@ -466,9 +515,7 @@ function Orders() {
                       <div className="order-actions">
                         <button
                           className="order-edit-button"
-                          onClick={() =>
-                            openEditModal(order)
-                          }
+                          onClick={() => openEditModal(order)}
                           title="Chỉnh sửa"
                         >
                           ✎
@@ -476,9 +523,7 @@ function Orders() {
 
                         <button
                           className="order-delete-button"
-                          onClick={() =>
-                            handleDelete(order)
-                          }
+                          onClick={() => handleDelete(order)}
                           title="Xóa"
                         >
                           ×
@@ -489,20 +534,14 @@ function Orders() {
                 ))
               ) : (
                 <tr>
-                  <td
-                    colSpan={8}
-                    className="orders-empty"
-                  >
+                  <td colSpan={8} className="orders-empty">
                     <div>
                       <span>⌕</span>
 
-                      <strong>
-                        Không tìm thấy đơn hàng
-                      </strong>
+                      <strong>Không tìm thấy đơn hàng</strong>
 
                       <p>
-                        Hãy thử thay đổi từ khóa hoặc
-                        bộ lọc.
+                        Hãy thử thay đổi từ khóa hoặc bộ lọc.
                       </p>
                     </div>
                   </td>
@@ -521,9 +560,7 @@ function Orders() {
         >
           <div
             className="order-modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="order-modal-header">
               <div className="order-modal-title">
@@ -549,6 +586,7 @@ function Orders() {
               <button
                 className="order-modal-close"
                 onClick={closeModal}
+                disabled={saving}
               >
                 ×
               </button>
@@ -563,13 +601,10 @@ function Orders() {
 
                   <input
                     type="text"
-                    placeholder="VD: DH0013"
+                    placeholder="VD: DH0017"
                     value={form.code}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        code: e.target.value,
-                      })
+                      setForm({ ...form, code: e.target.value })
                     }
                   />
                 </div>
@@ -581,13 +616,10 @@ function Orders() {
 
                   <input
                     type="text"
-                    placeholder="VD: 31/10/2026"
+                    placeholder="VD: 07/11/2026"
                     value={form.date}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        date: e.target.value,
-                      })
+                      setForm({ ...form, date: e.target.value })
                     }
                   />
                 </div>
@@ -604,10 +636,7 @@ function Orders() {
                     placeholder="Tên khách hàng"
                     value={form.customer}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        customer: e.target.value,
-                      })
+                      setForm({ ...form, customer: e.target.value })
                     }
                   />
                 </div>
@@ -622,10 +651,7 @@ function Orders() {
                     placeholder="0901234567"
                     value={form.phone}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        phone: e.target.value,
-                      })
+                      setForm({ ...form, phone: e.target.value })
                     }
                   />
                 </div>
@@ -638,27 +664,14 @@ function Orders() {
                   <select
                     value={form.product}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        product: e.target.value,
-                      })
+                      setForm({ ...form, product: e.target.value })
                     }
                   >
-                    <option>
-                      Nước tinh khiết 20L
-                    </option>
-                    <option>
-                      Nước khoáng 500ml
-                    </option>
-                    <option>
-                      Nước khoáng 1.5L
-                    </option>
-                    <option>
-                      Nước ion kiềm 500ml
-                    </option>
-                    <option>
-                      Nước tinh khiết 350ml
-                    </option>
+                    <option>Nước tinh khiết 20L</option>
+                    <option>Nước khoáng 500ml</option>
+                    <option>Nước khoáng 1.5L</option>
+                    <option>Nước ion kiềm 500ml</option>
+                    <option>Nước tinh khiết 350ml</option>
                   </select>
                 </div>
 
@@ -673,10 +686,7 @@ function Orders() {
                     placeholder="0"
                     value={form.quantity}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        quantity: e.target.value,
-                      })
+                      setForm({ ...form, quantity: e.target.value })
                     }
                   />
                 </div>
@@ -695,10 +705,7 @@ function Orders() {
                       placeholder="0"
                       value={form.total}
                       onChange={(e) =>
-                        setForm({
-                          ...form,
-                          total: e.target.value,
-                        })
+                        setForm({ ...form, total: e.target.value })
                       }
                     />
 
@@ -714,8 +721,7 @@ function Orders() {
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        status:
-                          e.target.value as Order["status"],
+                        status: e.target.value as Order["status"],
                       })
                     }
                   >
@@ -732,6 +738,7 @@ function Orders() {
               <button
                 className="order-cancel-button"
                 onClick={closeModal}
+                disabled={saving}
               >
                 Hủy
               </button>
@@ -739,8 +746,11 @@ function Orders() {
               <button
                 className="order-save-button"
                 onClick={handleSave}
+                disabled={saving}
               >
-                {editingOrder
+                {saving
+                  ? "Đang lưu..."
+                  : editingOrder
                   ? "Lưu thay đổi"
                   : "Tạo đơn hàng"}
               </button>

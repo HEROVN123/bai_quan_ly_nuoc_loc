@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 interface InventoryItem {
   id: number;
@@ -11,76 +12,43 @@ interface InventoryItem {
   updatedAt: string;
 }
 
-const initialInventory: InventoryItem[] = [
-  {
-    id: 1,
-    code: "SP001",
-    product: "Nước tinh khiết 20L",
-    category: "Nước tinh khiết",
-    stock: 85,
-    minStock: 30,
-    unit: "Bình",
-    updatedAt: "02/11/2026",
-  },
-  {
-    id: 2,
-    code: "SP002",
-    product: "Nước khoáng 500ml",
-    category: "Nước khoáng",
-    stock: 240,
-    minStock: 100,
-    unit: "Thùng",
-    updatedAt: "02/11/2026",
-  },
-  {
-    id: 3,
-    code: "SP003",
-    product: "Nước khoáng 1.5L",
-    category: "Nước khoáng",
-    stock: 68,
-    minStock: 50,
-    unit: "Thùng",
-    updatedAt: "01/11/2026",
-  },
-  {
-    id: 4,
-    code: "SP004",
-    product: "Nước ion kiềm 500ml",
-    category: "Nước ion kiềm",
-    stock: 24,
-    minStock: 50,
-    unit: "Thùng",
-    updatedAt: "01/11/2026",
-  },
-  {
-    id: 5,
-    code: "SP005",
-    product: "Nước tinh khiết 350ml",
-    category: "Nước tinh khiết",
-    stock: 0,
-    minStock: 40,
-    unit: "Thùng",
-    updatedAt: "31/10/2026",
-  },
-  {
-    id: 6,
-    code: "SP006",
-    product: "Nước suối 330ml",
-    category: "Nước suối",
-    stock: 120,
-    minStock: 60,
-    unit: "Thùng",
-    updatedAt: "31/10/2026",
-  },
-];
+const API_URL = "http://localhost:3000/inventory";
+
+const getHeaders = () => {
+  const token = localStorage.getItem("accessToken");
+
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
+const getToday = () => {
+  return new Date().toLocaleDateString("vi-VN");
+};
+
+const getErrorMessage = async (response: Response) => {
+  try {
+    const data = await response.json();
+
+    if (Array.isArray(data.message)) {
+      return data.message.join(", ");
+    }
+
+    return data.message || "Đã xảy ra lỗi. Vui lòng thử lại.";
+  } catch {
+    return "Đã xảy ra lỗi. Vui lòng thử lại.";
+  }
+};
 
 function Inventory() {
-  const [inventory, setInventory] =
-    useState<InventoryItem[]>(initialInventory);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] =
-    useState("Tất cả");
+  const [statusFilter, setStatusFilter] = useState("Tất cả");
 
   const [showModal, setShowModal] = useState(false);
   const [editingItem, setEditingItem] =
@@ -96,6 +64,52 @@ function Inventory() {
     updatedAt: "",
   });
 
+  // Lấy dữ liệu kho hàng từ Backend
+  const fetchInventory = useCallback(async () => {
+    try {
+      setError("");
+
+      const response = await fetch(API_URL, {
+        method: "GET",
+        headers: getHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const data = await response.json();
+
+      const normalizedData: InventoryItem[] = data.map(
+        (item: any) => ({
+          id: Number(item.id),
+          code: item.code,
+          product: item.product,
+          category: item.category,
+          stock: Number(item.stock),
+          minStock: Number(item.minStock),
+          unit: item.unit,
+          updatedAt: item.updatedAt || "",
+        })
+      );
+
+      setInventory(normalizedData);
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Không thể tải dữ liệu kho hàng."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInventory();
+  }, [fetchInventory]);
+
+  // Xác định trạng thái tồn kho
   const getStatus = (item: InventoryItem) => {
     if (item.stock === 0) {
       return "Hết hàng";
@@ -108,6 +122,7 @@ function Inventory() {
     return "Đủ hàng";
   };
 
+  // Tìm kiếm và lọc
   const filteredInventory = useMemo(() => {
     return inventory.filter((item) => {
       const keyword = search.toLowerCase();
@@ -125,6 +140,7 @@ function Inventory() {
     });
   }, [inventory, search, statusFilter]);
 
+  // Thống kê kho hàng
   const totalStock = inventory.reduce(
     (total, item) => total + item.stock,
     0
@@ -143,6 +159,7 @@ function Inventory() {
     (item) => item.stock === 0
   ).length;
 
+  // Mở modal thêm mới
   const openAddModal = () => {
     setEditingItem(null);
 
@@ -153,12 +170,13 @@ function Inventory() {
       stock: "",
       minStock: "",
       unit: "Thùng",
-      updatedAt: "02/11/2026",
+      updatedAt: getToday(),
     });
 
     setShowModal(true);
   };
 
+  // Mở modal chỉnh sửa
   const openEditModal = (item: InventoryItem) => {
     setEditingItem(item);
 
@@ -176,16 +194,19 @@ function Inventory() {
   };
 
   const closeModal = () => {
+    if (saving) return;
+
     setShowModal(false);
     setEditingItem(null);
   };
 
-  const handleSave = () => {
+  // Thêm hoặc cập nhật kho hàng
+  const handleSave = async () => {
     if (
       !form.code.trim() ||
       !form.product.trim() ||
-      !form.stock ||
-      !form.minStock ||
+      form.stock === "" ||
+      form.minStock === "" ||
       !form.updatedAt.trim()
     ) {
       alert("Vui lòng nhập đầy đủ thông tin kho hàng.");
@@ -195,68 +216,101 @@ function Inventory() {
     const stock = Number(form.stock);
     const minStock = Number(form.minStock);
 
-    if (stock < 0 || minStock < 0) {
-      alert("Tồn kho và mức tồn tối thiểu không được âm.");
+    if (
+      !Number.isInteger(stock) ||
+      !Number.isInteger(minStock) ||
+      stock < 0 ||
+      minStock < 0
+    ) {
+      alert(
+        "Tồn kho và mức tồn tối thiểu phải là số nguyên không âm."
+      );
       return;
     }
 
-    if (editingItem) {
-      setInventory((current) =>
-        current.map((item) =>
-          item.id === editingItem.id
-            ? {
-                ...item,
-                code: form.code,
-                product: form.product,
-                category: form.category,
-                stock,
-                minStock,
-                unit: form.unit,
-                updatedAt: form.updatedAt,
-              }
-            : item
-        )
+    const inventoryData = {
+      code: form.code.trim(),
+      product: form.product.trim(),
+      category: form.category,
+      stock,
+      minStock,
+      unit: form.unit,
+      updatedAt: form.updatedAt.trim(),
+    };
+
+    try {
+      setSaving(true);
+
+      const url = editingItem
+        ? `${API_URL}/${editingItem.id}`
+        : API_URL;
+
+      const response = await fetch(url, {
+        method: editingItem ? "PATCH" : "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(inventoryData),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      alert(
+        editingItem
+          ? "Cập nhật kho hàng thành công!"
+          : "Thêm sản phẩm vào kho thành công!"
       );
 
-      alert("Cập nhật kho hàng thành công!");
-    } else {
-      const newItem: InventoryItem = {
-        id: Date.now(),
-        code: form.code,
-        product: form.product,
-        category: form.category,
-        stock,
-        minStock,
-        unit: form.unit,
-        updatedAt: form.updatedAt,
-      };
+      setShowModal(false);
+      setEditingItem(null);
 
-      setInventory((current) => [
-        ...current,
-        newItem,
-      ]);
-
-      alert("Thêm sản phẩm vào kho thành công!");
+      await fetchInventory();
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Không thể lưu dữ liệu kho hàng."
+      );
+    } finally {
+      setSaving(false);
     }
-
-    closeModal();
   };
 
-  const handleDelete = (item: InventoryItem) => {
+  // Xóa sản phẩm khỏi kho
+  const handleDelete = async (item: InventoryItem) => {
     const confirmed = window.confirm(
       `Bạn có chắc chắn muốn xóa "${item.product}" khỏi danh sách kho không?`
     );
 
     if (!confirmed) return;
 
-    setInventory((current) =>
-      current.filter(
-        (inventoryItem) =>
-          inventoryItem.id !== item.id
-      )
-    );
+    try {
+      const response = await fetch(`${API_URL}/${item.id}`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setInventory((current) =>
+        current.filter(
+          (inventoryItem) => inventoryItem.id !== item.id
+        )
+      );
+
+      alert("Xóa sản phẩm khỏi kho thành công!");
+    } catch (err) {
+      alert(
+        err instanceof Error
+          ? err.message
+          : "Không thể xóa sản phẩm khỏi kho."
+      );
+    }
   };
 
+  // Tính phần trăm thanh tồn kho
   const getStockPercent = (item: InventoryItem) => {
     if (item.minStock === 0) {
       return item.stock > 0 ? 100 : 0;
@@ -297,6 +351,30 @@ function Inventory() {
           Nhập kho
         </button>
       </div>
+
+      {/* THÔNG BÁO LỖI */}
+      {error && (
+        <div
+          style={{
+            padding: "12px 16px",
+            marginBottom: "16px",
+            color: "#dc2626",
+            background: "#fef2f2",
+            borderRadius: "8px",
+          }}
+        >
+          {error}
+          <button
+            onClick={fetchInventory}
+            style={{
+              marginLeft: "12px",
+              cursor: "pointer",
+            }}
+          >
+            Thử lại
+          </button>
+        </div>
+      )}
 
       {/* SUMMARY */}
       <div className="inventory-summary">
@@ -367,18 +445,14 @@ function Inventory() {
                 type="text"
                 placeholder="Tìm sản phẩm, mã..."
                 value={search}
-                onChange={(e) =>
-                  setSearch(e.target.value)
-                }
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
 
             <select
               className="inventory-filter-select"
               value={statusFilter}
-              onChange={(e) =>
-                setStatusFilter(e.target.value)
-              }
+              onChange={(e) => setStatusFilter(e.target.value)}
             >
               <option>Tất cả</option>
               <option>Đủ hàng</option>
@@ -404,7 +478,13 @@ function Inventory() {
             </thead>
 
             <tbody>
-              {filteredInventory.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={8} className="inventory-empty">
+                    Đang tải dữ liệu kho hàng...
+                  </td>
+                </tr>
+              ) : filteredInventory.length > 0 ? (
                 filteredInventory.map((item) => {
                   const status = getStatus(item);
 
@@ -423,13 +503,8 @@ function Inventory() {
                           </div>
 
                           <div>
-                            <strong>
-                              {item.product}
-                            </strong>
-
-                            <span>
-                              Đơn vị: {item.unit}
-                            </span>
+                            <strong>{item.product}</strong>
+                            <span>Đơn vị: {item.unit}</span>
                           </div>
                         </div>
                       </td>
@@ -444,9 +519,7 @@ function Inventory() {
                         <div className="inventory-stock-cell">
                           <div className="inventory-stock-number">
                             <strong>
-                              {item.stock.toLocaleString(
-                                "vi-VN"
-                              )}
+                              {item.stock.toLocaleString("vi-VN")}
                             </strong>
 
                             <span>{item.unit}</span>
@@ -462,9 +535,7 @@ function Inventory() {
                                   : "good"
                               }`}
                               style={{
-                                width: `${getStockPercent(
-                                  item
-                                )}%`,
+                                width: `${getStockPercent(item)}%`,
                               }}
                             ></div>
                           </div>
@@ -502,9 +573,7 @@ function Inventory() {
                         <div className="inventory-actions">
                           <button
                             className="inventory-edit-button"
-                            onClick={() =>
-                              openEditModal(item)
-                            }
+                            onClick={() => openEditModal(item)}
                             title="Chỉnh sửa"
                           >
                             ✎
@@ -512,9 +581,7 @@ function Inventory() {
 
                           <button
                             className="inventory-delete-button"
-                            onClick={() =>
-                              handleDelete(item)
-                            }
+                            onClick={() => handleDelete(item)}
                             title="Xóa"
                           >
                             ×
@@ -526,10 +593,7 @@ function Inventory() {
                 })
               ) : (
                 <tr>
-                  <td
-                    colSpan={8}
-                    className="inventory-empty"
-                  >
+                  <td colSpan={8} className="inventory-empty">
                     <div>
                       <span>⌕</span>
 
@@ -538,8 +602,7 @@ function Inventory() {
                       </strong>
 
                       <p>
-                        Hãy thử thay đổi từ khóa hoặc
-                        bộ lọc.
+                        Hãy thử thay đổi từ khóa hoặc bộ lọc.
                       </p>
                     </div>
                   </td>
@@ -558,9 +621,7 @@ function Inventory() {
         >
           <div
             className="inventory-modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="inventory-modal-header">
               <div className="inventory-modal-title">
@@ -586,6 +647,7 @@ function Inventory() {
               <button
                 className="inventory-modal-close"
                 onClick={closeModal}
+                disabled={saving}
               >
                 ×
               </button>
@@ -618,13 +680,12 @@ function Inventory() {
 
                   <input
                     type="text"
-                    placeholder="VD: 02/11/2026"
+                    placeholder="VD: 07/11/2026"
                     value={form.updatedAt}
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        updatedAt:
-                          e.target.value,
+                        updatedAt: e.target.value,
                       })
                     }
                   />
@@ -658,17 +719,16 @@ function Inventory() {
                     onChange={(e) =>
                       setForm({
                         ...form,
-                        category:
-                          e.target.value,
+                        category: e.target.value,
                       })
                     }
                   >
-                    <option>
-                      Nước tinh khiết
-                    </option>
+                    <option>Nước tinh khiết</option>
                     <option>Nước khoáng</option>
                     <option>Nước ion kiềm</option>
                     <option>Nước suối</option>
+                    <option>Nước chai</option>
+                    <option>Nước bình</option>
                   </select>
                 </div>
 
@@ -701,6 +761,7 @@ function Inventory() {
                   <input
                     type="number"
                     min="0"
+                    step="1"
                     placeholder="0"
                     value={form.stock}
                     onChange={(e) =>
@@ -720,6 +781,7 @@ function Inventory() {
                   <input
                     type="number"
                     min="0"
+                    step="1"
                     placeholder="0"
                     value={form.minStock}
                     onChange={(e) =>
@@ -737,6 +799,7 @@ function Inventory() {
               <button
                 className="inventory-cancel-button"
                 onClick={closeModal}
+                disabled={saving}
               >
                 Hủy
               </button>
@@ -744,8 +807,11 @@ function Inventory() {
               <button
                 className="inventory-save-button"
                 onClick={handleSave}
+                disabled={saving}
               >
-                {editingItem
+                {saving
+                  ? "Đang lưu..."
+                  : editingItem
                   ? "Lưu thay đổi"
                   : "Nhập vào kho"}
               </button>

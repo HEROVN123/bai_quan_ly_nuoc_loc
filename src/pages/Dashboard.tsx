@@ -1,117 +1,205 @@
-import { useState } from "react";
 
-type ModalType =
-  | "report"
-  | "create-order"
-  | "inventory"
-  | "orders"
-  | "product"
-  | "customer"
-  | "suggestion"
-  | null;
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
+
+const API_BASE = "http://localhost:3000";
+
+interface Product {
+  id: number;
+  name: string;
+  quantity: number;
+  price: number;
+  isActive?: boolean;
+}
+
+interface Customer {
+  id: number;
+  name: string;
+  isActive?: boolean;
+}
+
+interface Order {
+  id: number;
+  code: string;
+  customer: string;
+  phone: string;
+  product: string;
+  quantity: number;
+  total: number;
+  date: string;
+  status: string;
+  createdAt?: string;
+}
+
+interface InventoryItem {
+  id: number;
+  code: string;
+  product: string;
+  category: string;
+  stock: number;
+  minStock: number;
+  unit: string;
+  updatedAt: string;
+}
+
+type ModalType = "report" | "inventory" | "orders" | "suggestion" | null;
+
+const getHeaders = () => {
+  const token = localStorage.getItem("accessToken");
+
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
+const getErrorMessage = async (response: Response) => {
+  try {
+    const data = await response.json();
+
+    if (Array.isArray(data.message)) {
+      return data.message.join(", ");
+    }
+
+    return data.message || "Không thể tải dữ liệu.";
+  } catch {
+    return "Không thể tải dữ liệu từ máy chủ.";
+  }
+};
+
+const formatMoney = (value: number) => {
+  return value.toLocaleString("vi-VN") + "đ";
+};
+
+const formatShortMoney = (value: number) => {
+  if (value >= 1000000) {
+    return (value / 1000000).toFixed(1) + "M";
+  }
+
+  if (value >= 1000) {
+    return (value / 1000).toFixed(0) + "K";
+  }
+
+  return String(value);
+};
+
+// Chuyển ngày từ Backend thành Date
+const parseOrderDate = (value?: string) => {
+  if (!value) return null;
+
+  // Hỗ trợ định dạng dd/MM/yyyy
+  const vietnameseDate = value.match(
+    /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/
+  );
+
+  if (vietnameseDate) {
+    const [, day, month, year] = vietnameseDate;
+
+    return new Date(
+      Number(year),
+      Number(month) - 1,
+      Number(day)
+    );
+  }
+
+  // Hỗ trợ định dạng yyyy-MM-dd
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date;
+};
+
+const getOrderDate = (order: Order) => {
+  return parseOrderDate(order.date) ||
+    parseOrderDate(order.createdAt);
+};
+
+const getOrderTime = (order: Order) => {
+  return getOrderDate(order)?.getTime() || 0;
+};
 
 function Dashboard() {
+  const navigate = useNavigate();
+
   const [period, setPeriod] = useState("7 ngày");
   const [modalType, setModalType] = useState<ModalType>(null);
 
-  const stats = [
-    {
-      title: "Tổng sản phẩm",
-      value: "128",
-      change: "+8.2%",
-      description: "so với tháng trước",
-      icon: "◈",
-      type: "cyan",
-    },
-    {
-      title: "Đơn hàng",
-      value: "356",
-      change: "+12.5%",
-      description: "so với tháng trước",
-      icon: "▣",
-      type: "blue",
-    },
-    {
-      title: "Khách hàng",
-      value: "1,248",
-      change: "+6.8%",
-      description: "khách hàng đang hoạt động",
-      icon: "♙",
-      type: "purple",
-    },
-    {
-      title: "Doanh thu",
-      value: "286.4M",
-      change: "+15.3%",
-      description: "so với tháng trước",
-      icon: "₫",
-      type: "green",
-    },
-  ];
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [inventory, setInventory] = useState<InventoryItem[]>([]);
 
-  const recentOrders = [
-    {
-      code: "#DH0012",
-      customer: "Nguyễn Minh Anh",
-      product: "Nước tinh khiết 20L",
-      quantity: "5 bình",
-      total: "450.000đ",
-      status: "Đang giao",
-    },
-    {
-      code: "#DH0011",
-      customer: "Trần Hoàng Nam",
-      product: "Nước khoáng 500ml",
-      quantity: "10 thùng",
-      total: "720.000đ",
-      status: "Đã giao",
-    },
-    {
-      code: "#DH0010",
-      customer: "Công ty ABC",
-      product: "Nước tinh khiết 20L",
-      quantity: "20 bình",
-      total: "1.800.000đ",
-      status: "Chờ xử lý",
-    },
-    {
-      code: "#DH0009",
-      customer: "Lê Thị Hương",
-      product: "Nước khoáng 1.5L",
-      quantity: "8 thùng",
-      total: "640.000đ",
-      status: "Đã giao",
-    },
-  ];
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
-  const inventory = [
-    {
-      name: "Nước tinh khiết 20L",
-      stock: 82,
-      total: 100,
-      unit: "bình",
-    },
-    {
-      name: "Nước khoáng 500ml",
-      stock: 64,
-      total: 100,
-      unit: "thùng",
-    },
-    {
-      name: "Nước khoáng 1.5L",
-      stock: 45,
-      total: 100,
-      unit: "thùng",
-    },
-    {
-      name: "Nước ion kiềm 500ml",
-      stock: 28,
-      total: 100,
-      unit: "thùng",
-    },
-  ];
+  // Lấy dữ liệu từ các API
+  const fetchDashboardData = useCallback(async () => {
+    try {
+      setError("");
 
-  const performance = [42, 55, 48, 72, 61, 78, 86];
+      const endpoints = [
+        `${API_BASE}/products`,
+        `${API_BASE}/customers`,
+        `${API_BASE}/orders`,
+        `${API_BASE}/inventory`,
+      ];
+
+      const responses = await Promise.all(
+        endpoints.map((url) =>
+          fetch(url, {
+            method: "GET",
+            headers: getHeaders(),
+          })
+        )
+      );
+
+      for (const response of responses) {
+        if (!response.ok) {
+          throw new Error(await getErrorMessage(response));
+        }
+      }
+
+      const [
+        productData,
+        customerData,
+        orderData,
+        inventoryData,
+      ] = await Promise.all(
+        responses.map((response) => response.json())
+      );
+
+      setProducts(
+        Array.isArray(productData) ? productData : []
+      );
+
+      setCustomers(
+        Array.isArray(customerData) ? customerData : []
+      );
+
+      setOrders(
+        Array.isArray(orderData) ? orderData : []
+      );
+
+      setInventory(
+        Array.isArray(inventoryData) ? inventoryData : []
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Không thể tải dữ liệu Dashboard."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [fetchDashboardData]);
 
   const closeModal = () => {
     setModalType(null);
@@ -120,17 +208,11 @@ function Dashboard() {
   const getModalTitle = () => {
     switch (modalType) {
       case "report":
-        return "Xuất báo cáo";
-      case "create-order":
-        return "Tạo đơn hàng";
+        return "Báo cáo kinh doanh";
       case "inventory":
         return "Tình trạng kho";
       case "orders":
         return "Đơn hàng gần đây";
-      case "product":
-        return "Thêm sản phẩm";
-      case "customer":
-        return "Thêm khách hàng";
       case "suggestion":
         return "Thông tin vận hành";
       default:
@@ -138,6 +220,195 @@ function Dashboard() {
     }
   };
 
+  // Doanh thu: không tính các đơn đã hủy
+  const totalRevenue = orders.reduce((total, order) => {
+    return order.status === "Đã hủy"
+      ? total
+      : total + Number(order.total || 0);
+  }, 0);
+
+  // Đơn hàng gần đây
+  const sortedOrders = useMemo(() => {
+    return [...orders].sort(
+      (a, b) => getOrderTime(b) - getOrderTime(a)
+    );
+  }, [orders]);
+
+  const recentOrders = sortedOrders.slice(0, 4);
+
+  // Tình trạng kho
+  const lowStockItems = inventory.filter(
+    (item) => item.stock > 0 && item.stock <= item.minStock
+  );
+
+  const outOfStockItems = inventory.filter(
+    (item) => item.stock === 0
+  );
+
+  const pendingOrders = orders.filter(
+    (order) => order.status === "Đang xử lý"
+  );
+
+  // Thống kê
+  const stats = [
+    {
+      title: "Tổng sản phẩm",
+      value: products.length.toLocaleString("vi-VN"),
+      description: "sản phẩm trong hệ thống",
+      icon: "◈",
+      type: "cyan",
+    },
+    {
+      title: "Đơn hàng",
+      value: orders.length.toLocaleString("vi-VN"),
+      description: "đơn hàng trong hệ thống",
+      icon: "▣",
+      type: "blue",
+    },
+    {
+      title: "Khách hàng",
+      value: customers.length.toLocaleString("vi-VN"),
+      description: "khách hàng trong hệ thống",
+      icon: "♙",
+      type: "purple",
+    },
+    {
+      title: "Doanh thu",
+      value: formatShortMoney(totalRevenue),
+      description: "tổng giá trị đơn chưa hủy",
+      icon: "₫",
+      type: "green",
+    },
+  ];
+
+  // Tính doanh thu theo khoảng thời gian
+  const performance = useMemo(() => {
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const days =
+      period === "7 ngày"
+        ? 7
+        : period === "30 ngày"
+        ? 30
+        : 90;
+
+    const startDate = new Date(today);
+    startDate.setDate(today.getDate() - days + 1);
+
+    const bucketCount = 7;
+    const bucketSize = days / bucketCount;
+
+    const buckets = Array.from(
+      { length: bucketCount },
+      (_, index) => {
+        const start = new Date(startDate);
+
+        start.setDate(
+          startDate.getDate() + Math.floor(index * bucketSize)
+        );
+
+        const end = new Date(startDate);
+
+        end.setDate(
+          startDate.getDate() +
+            Math.floor((index + 1) * bucketSize)
+        );
+
+        const label =
+          period === "7 ngày"
+            ? start.toLocaleDateString("vi-VN", {
+                weekday: "short",
+              })
+            : `${start.getDate()}/${start.getMonth() + 1}`;
+
+        return {
+          label,
+          start,
+          end,
+          revenue: 0,
+          count: 0,
+        };
+      }
+    );
+
+    orders.forEach((order) => {
+      if (order.status === "Đã hủy") return;
+
+      const orderDate = getOrderDate(order);
+
+      if (!orderDate) return;
+
+      orderDate.setHours(0, 0, 0, 0);
+
+      const bucket = buckets.find(
+        (item) =>
+          orderDate >= item.start &&
+          orderDate < item.end
+      );
+
+      if (bucket) {
+        bucket.revenue += Number(order.total || 0);
+        bucket.count += 1;
+      }
+    });
+
+    return buckets;
+  }, [orders, period]);
+
+  const periodRevenue = performance.reduce(
+    (total, item) => total + item.revenue,
+    0
+  );
+
+  const periodOrderCount = performance.reduce(
+    (total, item) => total + item.count,
+    0
+  );
+
+  const maxRevenue = Math.max(
+    ...performance.map((item) => item.revenue),
+    1
+  );
+
+  const chartMax = Math.ceil(maxRevenue / 4) * 4 || 4;
+
+  const getStatusClass = (status: string) => {
+    if (status === "Hoàn thành" || status === "Đã giao") {
+      return "delivered";
+    }
+
+    if (status === "Đang giao") {
+      return "shipping";
+    }
+
+    return "pending";
+  };
+
+  const getInventoryPercent = (item: InventoryItem) => {
+    if (item.minStock === 0) {
+      return item.stock > 0 ? 100 : 0;
+    }
+
+    const percent =
+      (item.stock / (item.minStock * 3)) * 100;
+
+    return Math.min(Math.max(percent, 0), 100);
+  };
+
+  const getInventoryLevel = (item: InventoryItem) => {
+    if (item.stock === 0 || item.stock <= item.minStock) {
+      return "low";
+    }
+
+    if (item.stock <= item.minStock * 2) {
+      return "medium";
+    }
+
+    return "high";
+  };
+
+  // Nội dung Modal
   const renderModalContent = () => {
     switch (modalType) {
       case "report":
@@ -146,160 +417,43 @@ function Dashboard() {
             <div className="dashboard-modal-summary">
               <div>
                 <span>Doanh thu</span>
-                <strong>286.4M đ</strong>
+                <strong>{formatMoney(totalRevenue)}</strong>
               </div>
 
               <div>
                 <span>Đơn hàng</span>
-                <strong>356</strong>
+                <strong>{orders.length}</strong>
               </div>
 
               <div>
                 <span>Khách hàng</span>
-                <strong>1,248</strong>
+                <strong>{customers.length}</strong>
               </div>
             </div>
 
             <div className="dashboard-report-box">
               <div>
                 <strong>Báo cáo kinh doanh</strong>
-                <span>Tháng hiện tại</span>
+                <span>Dữ liệu hiện tại từ hệ thống</span>
               </div>
 
               <span className="dashboard-report-status">
-                Sẵn sàng
+                Đã cập nhật
               </span>
             </div>
 
-            <div className="dashboard-report-options">
-              <label>
-                <span>Khoảng thời gian</span>
-
-                <select defaultValue="Tháng này">
-                  <option>Hôm nay</option>
-                  <option>7 ngày qua</option>
-                  <option>Tháng này</option>
-                  <option>3 tháng gần nhất</option>
-                </select>
-              </label>
-
-              <label>
-                <span>Định dạng</span>
-
-                <select defaultValue="Excel">
-                  <option>Excel</option>
-                  <option>PDF</option>
-                </select>
-              </label>
-            </div>
+            <p>
+              Báo cáo đang hiển thị số liệu thực tế được lấy
+              từ cơ sở dữ liệu. Chức năng xuất file Excel/PDF
+              có thể bổ sung sau.
+            </p>
 
             <div className="dashboard-modal-footer">
               <button
                 className="dashboard-modal-cancel"
                 onClick={closeModal}
               >
-                Hủy
-              </button>
-
-              <button
-                className="dashboard-modal-primary"
-                onClick={() =>
-                  window.alert(
-                    "Báo cáo đã được chuẩn bị thành công."
-                  )
-                }
-              >
-                ↓ Xuất báo cáo
-              </button>
-            </div>
-          </>
-        );
-
-      case "create-order":
-        return (
-          <>
-            <div className="dashboard-form-grid">
-              <label>
-                <span>Khách hàng</span>
-
-                <select defaultValue="">
-                  <option value="" disabled>
-                    Chọn khách hàng
-                  </option>
-                  <option>
-                    Nguyễn Minh Anh
-                  </option>
-                  <option>
-                    Trần Hoàng Nam
-                  </option>
-                  <option>
-                    Công ty ABC
-                  </option>
-                </select>
-              </label>
-
-              <label>
-                <span>Sản phẩm</span>
-
-                <select defaultValue="">
-                  <option value="" disabled>
-                    Chọn sản phẩm
-                  </option>
-                  <option>
-                    Nước tinh khiết 20L
-                  </option>
-                  <option>
-                    Nước khoáng 500ml
-                  </option>
-                  <option>
-                    Nước khoáng 1.5L
-                  </option>
-                </select>
-              </label>
-
-              <label>
-                <span>Số lượng</span>
-
-                <input
-                  type="number"
-                  min="1"
-                  placeholder="Nhập số lượng"
-                />
-              </label>
-
-              <label>
-                <span>Ngày giao</span>
-
-                <input type="date" />
-              </label>
-            </div>
-
-            <div className="dashboard-order-note">
-              <span>Ghi chú</span>
-
-              <textarea
-                placeholder="Nhập ghi chú cho đơn hàng..."
-                rows={3}
-              ></textarea>
-            </div>
-
-            <div className="dashboard-modal-footer">
-              <button
-                className="dashboard-modal-cancel"
-                onClick={closeModal}
-              >
-                Hủy
-              </button>
-
-              <button
-                className="dashboard-modal-primary"
-                onClick={() =>
-                  window.alert(
-                    "Đơn hàng đã được tạo thành công."
-                  )
-                }
-              >
-                + Tạo đơn hàng
+                Đóng
               </button>
             </div>
           </>
@@ -309,46 +463,41 @@ function Dashboard() {
         return (
           <>
             <div className="dashboard-modal-list">
-              {inventory.map((item) => {
-                const percentage =
-                  (item.stock / item.total) * 100;
+              {inventory.length > 0 ? (
+                inventory.map((item) => {
+                  const percentage = getInventoryPercent(item);
+                  const level = getInventoryLevel(item);
 
-                let level = "high";
+                  return (
+                    <div
+                      className="dashboard-modal-inventory-item"
+                      key={item.id}
+                    >
+                      <div>
+                        <strong>{item.product}</strong>
+                        <span>
+                          {item.stock} {item.unit}
+                        </span>
+                      </div>
 
-                if (percentage < 35) {
-                  level = "low";
-                } else if (percentage < 60) {
-                  level = "medium";
-                }
+                      <div className="dashboard-modal-progress">
+                        <div
+                          className={`dashboard-modal-progress-bar ${level}`}
+                          style={{
+                            width: `${percentage}%`,
+                          }}
+                        ></div>
+                      </div>
 
-                return (
-                  <div
-                    className="dashboard-modal-inventory-item"
-                    key={item.name}
-                  >
-                    <div>
-                      <strong>{item.name}</strong>
-
-                      <span>
-                        {item.stock} {item.unit}
-                      </span>
+                      <small>
+                        {percentage.toFixed(0)}% mức tồn kho
+                      </small>
                     </div>
-
-                    <div className="dashboard-modal-progress">
-                      <div
-                        className={`dashboard-modal-progress-bar ${level}`}
-                        style={{
-                          width: `${percentage}%`,
-                        }}
-                      ></div>
-                    </div>
-
-                    <small>
-                      {percentage.toFixed(0)}% tồn kho
-                    </small>
-                  </div>
-                );
-              })}
+                  );
+                })
+              ) : (
+                <p>Chưa có dữ liệu kho hàng.</p>
+              )}
             </div>
 
             <div className="dashboard-modal-footer">
@@ -361,11 +510,7 @@ function Dashboard() {
 
               <button
                 className="dashboard-modal-primary"
-                onClick={() =>
-                  window.alert(
-                    "Đây sẽ là nơi chuyển sang quản lý kho."
-                  )
-                }
+                onClick={() => navigate("/inventory")}
               >
                 Quản lý kho →
               </button>
@@ -377,41 +522,39 @@ function Dashboard() {
         return (
           <>
             <div className="dashboard-modal-orders">
-              {recentOrders.map((order) => (
-                <div
-                  className="dashboard-modal-order"
-                  key={order.code}
-                >
-                  <div>
-                    <strong>{order.code}</strong>
-
-                    <span>{order.customer}</span>
-                  </div>
-
-                  <div>
-                    <span>{order.product}</span>
-
-                    <small>
-                      {order.quantity}
-                    </small>
-                  </div>
-
-                  <strong>{order.total}</strong>
-
-                  <span
-                    className={`dashboard-status ${
-                      order.status === "Đã giao"
-                        ? "delivered"
-                        : order.status === "Đang giao"
-                        ? "shipping"
-                        : "pending"
-                    }`}
+              {sortedOrders.length > 0 ? (
+                sortedOrders.slice(0, 8).map((order) => (
+                  <div
+                    className="dashboard-modal-order"
+                    key={order.id}
                   >
-                    <span></span>
-                    {order.status}
-                  </span>
-                </div>
-              ))}
+                    <div>
+                      <strong>{order.code}</strong>
+                      <span>{order.customer}</span>
+                    </div>
+
+                    <div>
+                      <span>{order.product}</span>
+                      <small>{order.quantity}</small>
+                    </div>
+
+                    <strong>
+                      {formatMoney(Number(order.total || 0))}
+                    </strong>
+
+                    <span
+                      className={`dashboard-status ${getStatusClass(
+                        order.status
+                      )}`}
+                    >
+                      <span></span>
+                      {order.status}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <p>Chưa có đơn hàng nào.</p>
+              )}
             </div>
 
             <div className="dashboard-modal-footer">
@@ -424,139 +567,9 @@ function Dashboard() {
 
               <button
                 className="dashboard-modal-primary"
-                onClick={() =>
-                  window.alert(
-                    "Đây sẽ là nơi chuyển sang quản lý đơn hàng."
-                  )
-                }
+                onClick={() => navigate("/orders")}
               >
                 Quản lý đơn hàng →
-              </button>
-            </div>
-          </>
-        );
-
-      case "product":
-        return (
-          <>
-            <div className="dashboard-form-grid">
-              <label>
-                <span>Tên sản phẩm</span>
-
-                <input
-                  type="text"
-                  placeholder="Ví dụ: Nước tinh khiết 20L"
-                />
-              </label>
-
-              <label>
-                <span>Mã sản phẩm</span>
-
-                <input
-                  type="text"
-                  placeholder="Ví dụ: SP007"
-                />
-              </label>
-
-              <label>
-                <span>Giá bán</span>
-
-                <input
-                  type="number"
-                  placeholder="Nhập giá bán"
-                />
-              </label>
-
-              <label>
-                <span>Tồn kho</span>
-
-                <input
-                  type="number"
-                  placeholder="Nhập số lượng"
-                />
-              </label>
-            </div>
-
-            <div className="dashboard-modal-footer">
-              <button
-                className="dashboard-modal-cancel"
-                onClick={closeModal}
-              >
-                Hủy
-              </button>
-
-              <button
-                className="dashboard-modal-primary"
-                onClick={() =>
-                  window.alert(
-                    "Sản phẩm đã được thêm thành công."
-                  )
-                }
-              >
-                + Thêm sản phẩm
-              </button>
-            </div>
-          </>
-        );
-
-      case "customer":
-        return (
-          <>
-            <div className="dashboard-form-grid">
-              <label>
-                <span>Họ và tên</span>
-
-                <input
-                  type="text"
-                  placeholder="Nhập tên khách hàng"
-                />
-              </label>
-
-              <label>
-                <span>Số điện thoại</span>
-
-                <input
-                  type="text"
-                  placeholder="Nhập số điện thoại"
-                />
-              </label>
-
-              <label>
-                <span>Email</span>
-
-                <input
-                  type="email"
-                  placeholder="Nhập email"
-                />
-              </label>
-
-              <label>
-                <span>Địa chỉ</span>
-
-                <input
-                  type="text"
-                  placeholder="Nhập địa chỉ"
-                />
-              </label>
-            </div>
-
-            <div className="dashboard-modal-footer">
-              <button
-                className="dashboard-modal-cancel"
-                onClick={closeModal}
-              >
-                Hủy
-              </button>
-
-              <button
-                className="dashboard-modal-primary"
-                onClick={() =>
-                  window.alert(
-                    "Khách hàng đã được thêm thành công."
-                  )
-                }
-              >
-                + Thêm khách hàng
               </button>
             </div>
           </>
@@ -571,14 +584,12 @@ function Dashboard() {
               </div>
 
               <div>
-                <strong>
-                  Kiểm tra tồn kho
-                </strong>
+                <strong>Kiểm tra tồn kho</strong>
 
                 <p>
-                  Hiện có 2 sản phẩm đang ở mức tồn
-                  kho thấp. Bạn nên kiểm tra và nhập
-                  thêm hàng để tránh thiếu sản phẩm.
+                  {lowStockItems.length + outOfStockItems.length > 0
+                    ? `Có ${lowStockItems.length} sản phẩm sắp hết và ${outOfStockItems.length} sản phẩm đã hết hàng. Bạn nên kiểm tra và nhập thêm hàng.`
+                    : "Tình trạng tồn kho hiện tại đang ổn định."}
                 </p>
               </div>
             </div>
@@ -589,14 +600,12 @@ function Dashboard() {
               </div>
 
               <div>
-                <strong>
-                  Xử lý đơn hàng
-                </strong>
+                <strong>Xử lý đơn hàng</strong>
 
                 <p>
-                  Có 12 đơn hàng đang chờ xử lý.
-                  Bạn nên kiểm tra các đơn này trong
-                  hôm nay.
+                  {pendingOrders.length > 0
+                    ? `Có ${pendingOrders.length} đơn hàng đang chờ xử lý. Bạn nên kiểm tra các đơn này.`
+                    : "Hiện không có đơn hàng nào đang chờ xử lý."}
                 </p>
               </div>
             </div>
@@ -619,9 +628,7 @@ function Dashboard() {
 
   return (
     <div className="dashboard-page">
-
       {/* PAGE HEADER */}
-
       <div className="dashboard-heading">
         <div>
           <div className="dashboard-breadcrumb">
@@ -643,23 +650,43 @@ function Dashboard() {
             className="dashboard-outline-button"
             onClick={() => setModalType("report")}
           >
-            ↓ Xuất báo cáo
+            ↓ Xem báo cáo
           </button>
 
           <button
             className="dashboard-primary-button"
-            onClick={() =>
-              setModalType("create-order")
-            }
+            onClick={() => navigate("/orders")}
           >
             + Tạo đơn hàng
           </button>
         </div>
       </div>
 
+      {/* ERROR */}
+      {error && (
+        <div
+          style={{
+            padding: "12px 16px",
+            marginBottom: "16px",
+            color: "#dc2626",
+            background: "#fef2f2",
+            borderRadius: "8px",
+          }}
+        >
+          {error}
+          <button
+            onClick={fetchDashboardData}
+            style={{
+              marginLeft: "12px",
+              cursor: "pointer",
+            }}
+          >
+            Thử lại
+          </button>
+        </div>
+      )}
 
       {/* STATS */}
-
       <div className="dashboard-stats">
         {stats.map((stat) => (
           <div
@@ -667,19 +694,17 @@ function Dashboard() {
             key={stat.title}
           >
             <div className="stat-card-top">
-              <div
-                className={`stat-icon ${stat.type}`}
-              >
+              <div className={`stat-icon ${stat.type}`}>
                 {stat.icon}
               </div>
 
               <span className="stat-change">
-                ↑ {stat.change}
+                {loading ? "..." : "Thực tế"}
               </span>
             </div>
 
             <div className="stat-value">
-              {stat.value}
+              {loading ? "..." : stat.value}
             </div>
 
             <div className="stat-title">
@@ -693,11 +718,8 @@ function Dashboard() {
         ))}
       </div>
 
-
       {/* PERFORMANCE */}
-
       <div className="dashboard-card performance-card dashboard-full-card">
-
         <div className="dashboard-card-header">
           <div>
             <h2>Hiệu suất kinh doanh</h2>
@@ -709,9 +731,7 @@ function Dashboard() {
 
           <select
             value={period}
-            onChange={(e) =>
-              setPeriod(e.target.value)
-            }
+            onChange={(e) => setPeriod(e.target.value)}
             className="dashboard-select"
           >
             <option>7 ngày</option>
@@ -722,33 +742,43 @@ function Dashboard() {
 
         <div className="performance-summary">
           <div>
-            <strong>42.8M</strong>
+            <strong>
+              {loading ? "..." : formatShortMoney(periodRevenue)}
+            </strong>
             <span>Doanh thu</span>
           </div>
 
           <div>
-            <strong>86</strong>
+            <strong>
+              {loading ? "..." : periodOrderCount}
+            </strong>
             <span>Đơn hàng</span>
           </div>
 
           <div>
-            <strong>+15.3%</strong>
-            <span>Tăng trưởng</span>
+            <strong>
+              {loading
+                ? "..."
+                : periodOrderCount > 0
+                ? formatMoney(
+                    Math.round(periodRevenue / periodOrderCount)
+                  )
+                : "0đ"}
+            </strong>
+            <span>Trung bình/đơn</span>
           </div>
         </div>
 
         <div className="chart-container">
-
           <div className="chart-y-axis">
-            <span>100M</span>
-            <span>75M</span>
-            <span>50M</span>
-            <span>25M</span>
+            <span>{formatShortMoney(chartMax)}</span>
+            <span>{formatShortMoney(chartMax * 0.75)}</span>
+            <span>{formatShortMoney(chartMax * 0.5)}</span>
+            <span>{formatShortMoney(chartMax * 0.25)}</span>
             <span>0</span>
           </div>
 
           <div className="chart-area">
-
             <div className="chart-grid-lines">
               <span></span>
               <span></span>
@@ -758,135 +788,123 @@ function Dashboard() {
             </div>
 
             <div className="chart-bars">
-              {performance.map((value, index) => (
-                <div
-                  className="chart-column"
-                  key={index}
-                >
+              {performance.map((item, index) => {
+                const height =
+                  (item.revenue / chartMax) * 100;
+
+                return (
                   <div
-                    className="chart-bar"
-                    style={{
-                      height: `${value}%`,
-                    }}
+                    className="chart-column"
+                    key={index}
                   >
-                    <span className="chart-tooltip">
-                      {value}M
-                    </span>
+                    <div
+                      className="chart-bar"
+                      style={{
+                        height: `${height}%`,
+                      }}
+                    >
+                      <span className="chart-tooltip">
+                        {formatMoney(item.revenue)}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
 
             <div className="chart-labels">
-              <span>T2</span>
-              <span>T3</span>
-              <span>T4</span>
-              <span>T5</span>
-              <span>T6</span>
-              <span>T7</span>
-              <span>CN</span>
+              {performance.map((item, index) => (
+                <span key={index}>{item.label}</span>
+              ))}
             </div>
-
           </div>
         </div>
       </div>
 
-
-      {/* ===================================================
-    INVENTORY
-    =================================================== */}
-
-<div className="dashboard-card inventory-card">
-
-  <div className="dashboard-card-header inventory-card-header">
-    <div>
-      <h2>Tình trạng kho</h2>
-      <p>Thông tin tồn kho hiện tại</p>
-    </div>
-
-    <span className="inventory-total">
-      128 sản phẩm
-    </span>
-  </div>
-
-  <div className="dashboard-inventory-grid">
-
-    {inventory.map((item) => {
-      const percentage =
-        (item.stock / item.total) * 100;
-
-      let level = "high";
-
-      if (percentage < 35) {
-        level = "low";
-      } else if (percentage < 60) {
-        level = "medium";
-      }
-
-      return (
-        <div
-          className="dashboard-inventory-item"
-          key={item.name}
-        >
-
-          <div className="dashboard-inventory-item-top">
-            <div className="dashboard-inventory-name">
-              <span className={`inventory-level-dot ${level}`}></span>
-
-              <span>{item.name}</span>
-            </div>
-
-            <strong>
-              {item.stock} {item.unit}
-            </strong>
+      {/* INVENTORY */}
+      <div className="dashboard-card inventory-card">
+        <div className="dashboard-card-header inventory-card-header">
+          <div>
+            <h2>Tình trạng kho</h2>
+            <p>Thông tin tồn kho hiện tại</p>
           </div>
 
-          <div className="dashboard-inventory-progress">
-            <div
-              className={`dashboard-inventory-progress-bar ${level}`}
-              style={{
-                width: `${percentage}%`,
-              }}
-            ></div>
-          </div>
-
-          <div className="dashboard-inventory-bottom">
-            <span>Tồn kho</span>
-
-            <strong>
-              {percentage.toFixed(0)}%
-            </strong>
-          </div>
-
+          <span className="inventory-total">
+            {inventory.length} sản phẩm
+          </span>
         </div>
-      );
-    })}
 
-  </div>
+        <div className="dashboard-inventory-grid">
+          {inventory.length > 0 ? (
+            inventory.slice(0, 4).map((item) => {
+              const percentage = getInventoryPercent(item);
+              const level = getInventoryLevel(item);
 
-  <div className="dashboard-inventory-footer">
-    <span>
-      Kiểm tra và cập nhật số lượng tồn kho thường xuyên.
-    </span>
+              return (
+                <div
+                  className="dashboard-inventory-item"
+                  key={item.id}
+                >
+                  <div className="dashboard-inventory-item-top">
+                    <div className="dashboard-inventory-name">
+                      <span
+                        className={`inventory-level-dot ${level}`}
+                      ></span>
 
-    <button
-      className="dashboard-inventory-detail-button"
-      onClick={() => {
-        window.location.href = "/inventory";
-      }}
-    >
-      Xem chi tiết kho
-      <span>→</span>
-    </button>
-  </div>
+                      <span>{item.product}</span>
+                    </div>
 
-</div>
+                    <strong>
+                      {item.stock} {item.unit}
+                    </strong>
+                  </div>
 
+                  <div className="dashboard-inventory-progress">
+                    <div
+                      className={`dashboard-inventory-progress-bar ${level}`}
+                      style={{
+                        width: `${percentage}%`,
+                      }}
+                    ></div>
+                  </div>
+
+                  <div className="dashboard-inventory-bottom">
+                    <span>Tồn kho</span>
+
+                    <strong>
+                      {percentage.toFixed(0)}%
+                    </strong>
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <p>
+              {loading
+                ? "Đang tải dữ liệu kho..."
+                : "Chưa có dữ liệu kho hàng."}
+            </p>
+          )}
+        </div>
+
+        <div className="dashboard-inventory-footer">
+          <span>
+            Có {lowStockItems.length} sản phẩm sắp hết và{" "}
+            {outOfStockItems.length} sản phẩm hết hàng.
+          </span>
+
+          <button
+            className="dashboard-inventory-detail-button"
+            onClick={() => navigate("/inventory")}
+          >
+            Xem chi tiết kho
+            <span>→</span>
+          </button>
+        </div>
+      </div>
 
       {/* RECENT ORDERS */}
-
       <div className="dashboard-card recent-orders-card">
-
         <div className="dashboard-card-header">
           <div>
             <h2>Đơn hàng gần đây</h2>
@@ -898,9 +916,7 @@ function Dashboard() {
 
           <button
             className="view-all-button"
-            onClick={() =>
-              setModalType("orders")
-            }
+            onClick={() => navigate("/orders")}
           >
             Xem tất cả →
           </button>
@@ -908,7 +924,6 @@ function Dashboard() {
 
         <div className="dashboard-table-wrapper">
           <table className="dashboard-table">
-
             <thead>
               <tr>
                 <th>Mã đơn</th>
@@ -921,66 +936,59 @@ function Dashboard() {
             </thead>
 
             <tbody>
-              {recentOrders.map((order) => (
-                <tr key={order.code}>
-
-                  <td>
-                    <strong className="order-code">
-                      {order.code}
-                    </strong>
-                  </td>
-
-                  <td>
-                    {order.customer}
-                  </td>
-
-                  <td>
-                    {order.product}
-                  </td>
-
-                  <td>
-                    {order.quantity}
-                  </td>
-
-                  <td>
-                    <strong>
-                      {order.total}
-                    </strong>
-                  </td>
-
-                  <td>
-                    <span
-                      className={`dashboard-status ${
-                        order.status === "Đã giao"
-                          ? "delivered"
-                          : order.status === "Đang giao"
-                          ? "shipping"
-                          : "pending"
-                      }`}
-                    >
-                      <span></span>
-
-                      {order.status}
-                    </span>
-                  </td>
-
+              {loading ? (
+                <tr>
+                  <td colSpan={6}>Đang tải đơn hàng...</td>
                 </tr>
-              ))}
-            </tbody>
+              ) : recentOrders.length > 0 ? (
+                recentOrders.map((order) => (
+                  <tr key={order.id}>
+                    <td>
+                      <strong className="order-code">
+                        {order.code}
+                      </strong>
+                    </td>
 
+                    <td>{order.customer}</td>
+
+                    <td>{order.product}</td>
+
+                    <td>{order.quantity}</td>
+
+                    <td>
+                      <strong>
+                        {formatMoney(Number(order.total || 0))}
+                      </strong>
+                    </td>
+
+                    <td>
+                      <span
+                        className={`dashboard-status ${getStatusClass(
+                          order.status
+                        )}`}
+                      >
+                        <span></span>
+                        {order.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={6}>
+                    Chưa có đơn hàng nào.
+                  </td>
+                </tr>
+              )}
+            </tbody>
           </table>
         </div>
       </div>
 
-
       {/* BOTTOM GRID */}
-
       <div className="dashboard-bottom-grid">
-
         {/* SUGGESTIONS */}
-
         <div className="dashboard-card suggestion-card">
-
           <div className="dashboard-card-header">
             <div>
               <h2>Gợi ý vận hành</h2>
@@ -992,26 +1000,22 @@ function Dashboard() {
           </div>
 
           <div className="suggestion-list">
-
             <div className="suggestion-item">
               <div className="suggestion-icon warning">
                 !
               </div>
 
               <div>
-                <strong>
-                  Kiểm tra tồn kho
-                </strong>
+                <strong>Kiểm tra tồn kho</strong>
 
                 <p>
-                  2 sản phẩm đang sắp hết hàng.
+                  {lowStockItems.length + outOfStockItems.length}{" "}
+                  sản phẩm cần kiểm tra.
                 </p>
               </div>
 
               <button
-                onClick={() =>
-                  setModalType("suggestion")
-                }
+                onClick={() => setModalType("suggestion")}
               >
                 →
               </button>
@@ -1023,19 +1027,15 @@ function Dashboard() {
               </div>
 
               <div>
-                <strong>
-                  Xử lý đơn hàng
-                </strong>
+                <strong>Xử lý đơn hàng</strong>
 
                 <p>
-                  Có 12 đơn hàng đang chờ xử lý.
+                  Có {pendingOrders.length} đơn đang chờ xử lý.
                 </p>
               </div>
 
               <button
-                onClick={() =>
-                  setModalType("orders")
-                }
+                onClick={() => navigate("/orders")}
               >
                 →
               </button>
@@ -1047,33 +1047,25 @@ function Dashboard() {
               </div>
 
               <div>
-                <strong>
-                  Hiệu suất tốt
-                </strong>
+                <strong>Doanh thu hiện tại</strong>
 
                 <p>
-                  Doanh thu đang tăng 15.3% so với
-                  tháng trước.
+                  Tổng giá trị đơn hàng chưa bị hủy:{" "}
+                  {formatShortMoney(totalRevenue)}.
                 </p>
               </div>
 
               <button
-                onClick={() =>
-                  setModalType("report")
-                }
+                onClick={() => setModalType("report")}
               >
                 →
               </button>
             </div>
-
           </div>
         </div>
 
-
         {/* QUICK ACTIONS */}
-
         <div className="dashboard-card quick-actions-card">
-
           <div className="dashboard-card-header">
             <div>
               <h2>Thao tác nhanh</h2>
@@ -1085,89 +1077,54 @@ function Dashboard() {
           </div>
 
           <div className="quick-actions">
-
             <button
-              onClick={() =>
-                setModalType("product")
-              }
+              onClick={() => navigate("/san-pham")}
             >
               <span>＋</span>
 
               <div>
-                <strong>
-                  Thêm sản phẩm
-                </strong>
-
-                <small>
-                  Tạo sản phẩm mới
-                </small>
+                <strong>Thêm sản phẩm</strong>
+                <small>Tạo sản phẩm mới</small>
               </div>
             </button>
 
             <button
-              onClick={() =>
-                setModalType("create-order")
-              }
+              onClick={() => navigate("/orders")}
             >
               <span>▣</span>
 
               <div>
-                <strong>
-                  Tạo đơn hàng
-                </strong>
-
-                <small>
-                  Tạo đơn phân phối mới
-                </small>
+                <strong>Tạo đơn hàng</strong>
+                <small>Tạo đơn phân phối mới</small>
               </div>
             </button>
 
             <button
-              onClick={() =>
-                setModalType("customer")
-              }
+              onClick={() => navigate("/khach-hang")}
             >
               <span>♙</span>
 
               <div>
-                <strong>
-                  Thêm khách hàng
-                </strong>
-
-                <small>
-                  Thêm khách hàng mới
-                </small>
+                <strong>Thêm khách hàng</strong>
+                <small>Thêm khách hàng mới</small>
               </div>
             </button>
 
             <button
-              onClick={() =>
-                setModalType("inventory")
-              }
+              onClick={() => navigate("/inventory")}
             >
               <span>▤</span>
 
               <div>
-                <strong>
-                  Kiểm tra kho
-                </strong>
-
-                <small>
-                  Xem tình trạng tồn kho
-                </small>
+                <strong>Kiểm tra kho</strong>
+                <small>Xem tình trạng tồn kho</small>
               </div>
             </button>
-
           </div>
         </div>
-
       </div>
 
-
-      {/* =====================================================
-          CENTER MODAL
-          ===================================================== */}
-
+      {/* CENTER MODAL */}
       {modalType && (
         <div
           className="dashboard-modal-overlay"
@@ -1175,20 +1132,13 @@ function Dashboard() {
         >
           <div
             className="dashboard-modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
+            onClick={(e) => e.stopPropagation()}
           >
-
             <div className="dashboard-modal-header">
               <div>
-                <span>
-                  WATER MANAGER
-                </span>
+                <span>WATER MANAGER</span>
 
-                <h2>
-                  {getModalTitle()}
-                </h2>
+                <h2>{getModalTitle()}</h2>
               </div>
 
               <button
@@ -1202,11 +1152,9 @@ function Dashboard() {
             <div className="dashboard-modal-body">
               {renderModalContent()}
             </div>
-
           </div>
         </div>
       )}
-
     </div>
   );
 }

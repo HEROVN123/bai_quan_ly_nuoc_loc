@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react";
+
+import { useEffect, useMemo, useState } from "react";
 
 interface Employee {
   id: number;
@@ -11,67 +12,66 @@ interface Employee {
   status: "Đang làm việc" | "Nghỉ việc";
 }
 
-const initialEmployees: Employee[] = [
-  {
-    id: 1,
-    code: "NV001",
-    name: "Nguyễn Văn Minh",
-    phone: "0901234567",
-    email: "minh@watermanager.com",
-    department: "Kinh doanh",
-    position: "Nhân viên kinh doanh",
-    status: "Đang làm việc",
-  },
-  {
-    id: 2,
-    code: "NV002",
-    name: "Trần Thị Lan",
-    phone: "0912345678",
-    email: "lan@watermanager.com",
-    department: "Kế toán",
-    position: "Kế toán viên",
-    status: "Đang làm việc",
-  },
-  {
-    id: 3,
-    code: "NV003",
-    name: "Lê Quốc Huy",
-    phone: "0923456789",
-    email: "huy@watermanager.com",
-    department: "Kho vận",
-    position: "Nhân viên kho",
-    status: "Đang làm việc",
-  },
-  {
-    id: 4,
-    code: "NV004",
-    name: "Phạm Ngọc Mai",
-    phone: "0934567890",
-    email: "mai@watermanager.com",
-    department: "Kinh doanh",
-    position: "Nhân viên kinh doanh",
-    status: "Đang làm việc",
-  },
-  {
-    id: 5,
-    code: "NV005",
-    name: "Võ Thành Nam",
-    phone: "0945678901",
-    email: "nam@watermanager.com",
-    department: "Kho vận",
-    position: "Nhân viên giao hàng",
-    status: "Nghỉ việc",
-  },
-];
+interface ApiEmployee {
+  id: number;
+  code: string;
+  name: string;
+  phone: string;
+  email: string;
+  department: string;
+  position: string;
+  isActive: boolean;
+}
+
+const API_URL = "http://localhost:3000/employees";
+
+// Lấy dữ liệu từ Backend
+const getHeaders = () => {
+  const token = localStorage.getItem("accessToken");
+
+  return {
+    "Content-Type": "application/json",
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+};
+
+// Chuyển dữ liệu Backend thành dữ liệu giao diện
+const mapEmployee = (employee: ApiEmployee): Employee => ({
+  id: employee.id,
+  code: employee.code,
+  name: employee.name,
+  phone: employee.phone,
+  email: employee.email,
+  department: employee.department,
+  position: employee.position,
+  status: employee.isActive ? "Đang làm việc" : "Nghỉ việc",
+});
+
+// Đọc lỗi từ Backend
+const getErrorMessage = async (response: Response) => {
+  try {
+    const data = await response.json();
+
+    if (Array.isArray(data.message)) {
+      return data.message.join(", ");
+    }
+
+    return data.message || "Đã xảy ra lỗi. Vui lòng thử lại.";
+  } catch {
+    return "Không thể kết nối đến máy chủ.";
+  }
+};
 
 function Employees() {
-  const [employees, setEmployees] =
-    useState<Employee[]>(initialEmployees);
+  const [employees, setEmployees] = useState<Employee[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Tất cả");
-  const [departmentFilter, setDepartmentFilter] =
-    useState("Tất cả");
+  const [departmentFilter, setDepartmentFilter] = useState("Tất cả");
 
   const [showModal, setShowModal] = useState(false);
   const [editingEmployee, setEditingEmployee] =
@@ -86,6 +86,38 @@ function Employees() {
     position: "Nhân viên kinh doanh",
     status: "Đang làm việc" as Employee["status"],
   });
+
+  // Lấy danh sách nhân viên từ SQL Server
+  useEffect(() => {
+    const fetchEmployees = async () => {
+      try {
+        setLoading(true);
+        setError("");
+
+        const response = await fetch(API_URL, {
+          headers: getHeaders(),
+        });
+
+        if (!response.ok) {
+          throw new Error(await getErrorMessage(response));
+        }
+
+        const data: ApiEmployee[] = await response.json();
+
+        setEmployees(data.map(mapEmployee));
+      } catch (err) {
+        setError(
+          err instanceof Error
+            ? err.message
+            : "Không thể tải danh sách nhân viên."
+        );
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchEmployees();
+  }, []);
 
   const filteredEmployees = useMemo(() => {
     return employees.filter((employee) => {
@@ -111,12 +143,7 @@ function Employees() {
         matchesDepartment
       );
     });
-  }, [
-    employees,
-    search,
-    statusFilter,
-    departmentFilter,
-  ]);
+  }, [employees, search, statusFilter, departmentFilter]);
 
   const totalEmployees = employees.length;
 
@@ -165,11 +192,14 @@ function Employees() {
   };
 
   const closeModal = () => {
+    if (saving) return;
+
     setShowModal(false);
     setEditingEmployee(null);
   };
 
-  const handleSave = () => {
+  // Thêm hoặc cập nhật nhân viên
+  const handleSave = async () => {
     if (
       !form.code.trim() ||
       !form.name.trim() ||
@@ -180,60 +210,105 @@ function Employees() {
       return;
     }
 
-    if (editingEmployee) {
-      setEmployees((current) =>
-        current.map((employee) =>
-          employee.id === editingEmployee.id
-            ? {
-                ...employee,
-                code: form.code,
-                name: form.name,
-                phone: form.phone,
-                email: form.email,
-                department: form.department,
-                position: form.position,
-                status: form.status,
-              }
-            : employee
-        )
-      );
+    const payload = {
+      code: form.code.trim(),
+      name: form.name.trim(),
+      phone: form.phone.trim(),
+      email: form.email.trim(),
+      department: form.department,
+      position: form.position,
+      isActive: form.status === "Đang làm việc",
+    };
 
-      alert("Cập nhật nhân viên thành công!");
-    } else {
-      const newEmployee: Employee = {
-        id: Date.now(),
-        code: form.code,
-        name: form.name,
-        phone: form.phone,
-        email: form.email,
-        department: form.department,
-        position: form.position,
-        status: form.status,
-      };
+    try {
+      setSaving(true);
+      setError("");
 
-      setEmployees((current) => [
-        ...current,
-        newEmployee,
-      ]);
+      const isEditing = Boolean(editingEmployee);
 
-      alert("Thêm nhân viên thành công!");
+      const url = isEditing
+        ? `${API_URL}/${editingEmployee!.id}`
+        : API_URL;
+
+      const response = await fetch(url, {
+        method: isEditing ? "PATCH" : "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      const savedEmployee: ApiEmployee = await response.json();
+      const mappedEmployee = mapEmployee(savedEmployee);
+
+      if (isEditing) {
+        setEmployees((current) =>
+          current.map((employee) =>
+            employee.id === mappedEmployee.id
+              ? mappedEmployee
+              : employee
+          )
+        );
+
+        alert("Cập nhật nhân viên thành công!");
+      } else {
+        setEmployees((current) => [
+          mappedEmployee,
+          ...current,
+        ]);
+
+        alert("Thêm nhân viên thành công!");
+      }
+
+      setShowModal(false);
+      setEditingEmployee(null);
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Không thể lưu thông tin nhân viên.";
+
+      alert(message);
+    } finally {
+      setSaving(false);
     }
-
-    closeModal();
   };
 
-  const handleDelete = (employee: Employee) => {
+  // Xóa nhân viên
+  const handleDelete = async (employee: Employee) => {
     const confirmed = window.confirm(
       `Bạn có chắc chắn muốn xóa nhân viên "${employee.name}" không?`
     );
 
     if (!confirmed) return;
 
-    setEmployees((current) =>
-      current.filter(
-        (item) => item.id !== employee.id
-      )
-    );
+    try {
+      setError("");
+
+      const response = await fetch(`${API_URL}/${employee.id}`, {
+        method: "DELETE",
+        headers: getHeaders(),
+      });
+
+      if (!response.ok) {
+        throw new Error(await getErrorMessage(response));
+      }
+
+      setEmployees((current) =>
+        current.filter((item) => item.id !== employee.id)
+      );
+
+      alert("Xóa nhân viên thành công!");
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? err.message
+          : "Không thể xóa nhân viên.";
+
+      alert(message);
+    }
   };
 
   return (
@@ -320,8 +395,7 @@ function Employees() {
             <h2>Danh sách nhân viên</h2>
 
             <p>
-              {filteredEmployees.length} nhân viên được
-              hiển thị
+              {filteredEmployees.length} nhân viên được hiển thị
             </p>
           </div>
 
@@ -333,17 +407,13 @@ function Employees() {
                 type="text"
                 placeholder="Tìm tên, mã, SĐT..."
                 value={search}
-                onChange={(e) =>
-                  setSearch(e.target.value)
-                }
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
 
             <select
               value={departmentFilter}
-              onChange={(e) =>
-                setDepartmentFilter(e.target.value)
-              }
+              onChange={(e) => setDepartmentFilter(e.target.value)}
               className="employees-filter-select"
             >
               <option>Tất cả</option>
@@ -355,9 +425,7 @@ function Employees() {
 
             <select
               value={statusFilter}
-              onChange={(e) =>
-                setStatusFilter(e.target.value)
-              }
+              onChange={(e) => setStatusFilter(e.target.value)}
               className="employees-filter-select"
             >
               <option>Tất cả</option>
@@ -366,6 +434,15 @@ function Employees() {
             </select>
           </div>
         </div>
+
+        {error && (
+          <p
+            role="alert"
+            style={{ color: "#dc2626", padding: "12px 20px" }}
+          >
+            {error}
+          </p>
+        )}
 
         <div className="employees-table-wrapper">
           <table className="employees-table">
@@ -382,7 +459,13 @@ function Employees() {
             </thead>
 
             <tbody>
-              {filteredEmployees.length > 0 ? (
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="employees-empty">
+                    Đang tải danh sách nhân viên...
+                  </td>
+                </tr>
+              ) : filteredEmployees.length > 0 ? (
                 filteredEmployees.map((employee) => (
                   <tr key={employee.id}>
                     <td>
@@ -398,10 +481,7 @@ function Employees() {
                         </div>
 
                         <div>
-                          <strong>
-                            {employee.name}
-                          </strong>
-
+                          <strong>{employee.name}</strong>
                           <span>Nhân viên</span>
                         </div>
                       </div>
@@ -429,8 +509,7 @@ function Employees() {
                     <td>
                       <span
                         className={`employee-status ${
-                          employee.status ===
-                          "Đang làm việc"
+                          employee.status === "Đang làm việc"
                             ? "active"
                             : "inactive"
                         }`}
@@ -444,9 +523,7 @@ function Employees() {
                       <div className="employee-actions">
                         <button
                           className="employee-edit-button"
-                          onClick={() =>
-                            openEditModal(employee)
-                          }
+                          onClick={() => openEditModal(employee)}
                           title="Chỉnh sửa"
                         >
                           ✎
@@ -454,9 +531,7 @@ function Employees() {
 
                         <button
                           className="employee-delete-button"
-                          onClick={() =>
-                            handleDelete(employee)
-                          }
+                          onClick={() => handleDelete(employee)}
                           title="Xóa"
                         >
                           ×
@@ -467,10 +542,7 @@ function Employees() {
                 ))
               ) : (
                 <tr>
-                  <td
-                    colSpan={7}
-                    className="employees-empty"
-                  >
+                  <td colSpan={7} className="employees-empty">
                     <div>
                       <span>⌕</span>
 
@@ -479,8 +551,7 @@ function Employees() {
                       </strong>
 
                       <p>
-                        Hãy thử thay đổi từ khóa hoặc
-                        bộ lọc.
+                        Hãy thử thay đổi từ khóa hoặc bộ lọc.
                       </p>
                     </div>
                   </td>
@@ -499,9 +570,7 @@ function Employees() {
         >
           <div
             className="employee-modal"
-            onClick={(e) =>
-              e.stopPropagation()
-            }
+            onClick={(e) => e.stopPropagation()}
           >
             <div className="employee-modal-header">
               <div className="employee-modal-title">
@@ -527,6 +596,7 @@ function Employees() {
               <button
                 className="employee-modal-close"
                 onClick={closeModal}
+                disabled={saving}
               >
                 ×
               </button>
@@ -544,10 +614,7 @@ function Employees() {
                     placeholder="VD: NV006"
                     value={form.code}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        code: e.target.value,
-                      })
+                      setForm({ ...form, code: e.target.value })
                     }
                   />
                 </div>
@@ -562,10 +629,7 @@ function Employees() {
                     placeholder="Nhập họ và tên"
                     value={form.name}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        name: e.target.value,
-                      })
+                      setForm({ ...form, name: e.target.value })
                     }
                   />
                 </div>
@@ -582,10 +646,7 @@ function Employees() {
                     placeholder="0901234567"
                     value={form.phone}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        phone: e.target.value,
-                      })
+                      setForm({ ...form, phone: e.target.value })
                     }
                   />
                 </div>
@@ -600,10 +661,7 @@ function Employees() {
                     placeholder="employee@watermanager.com"
                     value={form.email}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        email: e.target.value,
-                      })
+                      setForm({ ...form, email: e.target.value })
                     }
                   />
                 </div>
@@ -616,10 +674,7 @@ function Employees() {
                   <select
                     value={form.department}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        department: e.target.value,
-                      })
+                      setForm({ ...form, department: e.target.value })
                     }
                   >
                     <option>Kinh doanh</option>
@@ -635,15 +690,10 @@ function Employees() {
                   <select
                     value={form.position}
                     onChange={(e) =>
-                      setForm({
-                        ...form,
-                        position: e.target.value,
-                      })
+                      setForm({ ...form, position: e.target.value })
                     }
                   >
-                    <option>
-                      Nhân viên kinh doanh
-                    </option>
+                    <option>Nhân viên kinh doanh</option>
                     <option>Kế toán viên</option>
                     <option>Nhân viên kho</option>
                     <option>Nhân viên giao hàng</option>
@@ -660,8 +710,7 @@ function Employees() {
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      status:
-                        e.target.value as Employee["status"],
+                      status: e.target.value as Employee["status"],
                     })
                   }
                 >
@@ -675,6 +724,7 @@ function Employees() {
               <button
                 className="employee-cancel-button"
                 onClick={closeModal}
+                disabled={saving}
               >
                 Hủy
               </button>
@@ -682,10 +732,13 @@ function Employees() {
               <button
                 className="employee-save-button"
                 onClick={handleSave}
+                disabled={saving}
               >
-                {editingEmployee
-                  ? "Lưu thay đổi"
-                  : "Thêm nhân viên"}
+                {saving
+                  ? "Đang lưu..."
+                  : editingEmployee
+                    ? "Lưu thay đổi"
+                    : "Thêm nhân viên"}
               </button>
             </div>
           </div>

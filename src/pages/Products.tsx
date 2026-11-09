@@ -1,4 +1,7 @@
+
 import { useEffect, useMemo, useState } from "react";
+
+const API_URL = "http://localhost:3000";
 
 interface Product {
   id: string;
@@ -11,73 +14,22 @@ interface Product {
   logoUrl?: string;
 }
 
-const initialProducts: Product[] = [
-  {
-    id: "1",
-    code: "SP001",
-    name: "Nước tinh khiết 20L",
-    category: "Nước tinh khiết",
-    price: 45000,
-    stock: 85,
-    status: "Đang bán",
-    logoUrl: "",
-  },
-  {
-    id: "2",
-    code: "SP002",
-    name: "Nước khoáng 500ml",
-    category: "Nước khoáng",
-    price: 75000,
-    stock: 240,
-    status: "Đang bán",
-    logoUrl: "",
-  },
-  {
-    id: "3",
-    code: "SP003",
-    name: "Nước khoáng 1.5L",
-    category: "Nước khoáng",
-    price: 90000,
-    stock: 68,
-    status: "Đang bán",
-    logoUrl: "",
-  },
-  {
-    id: "4",
-    code: "SP004",
-    name: "Nước ion kiềm 500ml",
-    category: "Nước ion kiềm",
-    price: 120000,
-    stock: 24,
-    status: "Đang bán",
-    logoUrl: "",
-  },
-  {
-    id: "5",
-    code: "SP005",
-    name: "Nước tinh khiết 350ml",
-    category: "Nước tinh khiết",
-    price: 65000,
-    stock: 0,
-    status: "Hết hàng",
-    logoUrl: "",
-  },
-];
+interface ProductApi {
+  id: number;
+  code?: string | null;
+  name: string;
+  category: string | null;
+  price: number;
+  quantity: number;
+  image: string | null;
+  isActive: boolean;
+}
 
 function Products() {
-  const [products, setProducts] = useState<Product[]>(() => {
-    const savedProducts = localStorage.getItem("water_manager_products");
-
-    if (savedProducts) {
-      try {
-        return JSON.parse(savedProducts);
-      } catch {
-        return initialProducts;
-      }
-    }
-
-    return initialProducts;
-  });
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [apiError, setApiError] = useState("");
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("Tất cả");
@@ -93,13 +45,70 @@ function Products() {
     logoUrl: "",
   });
 
-  useEffect(() => {
-    localStorage.setItem(
-      "water_manager_products",
-      JSON.stringify(products)
-    );
-  }, [products]);
+  // Lấy token đăng nhập
+  const getHeaders = () => {
+    const token = localStorage.getItem("accessToken");
 
+    return {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  };
+
+  // Chuyển dữ liệu từ Backend sang giao diện
+  const mapProduct = (item: ProductApi): Product => ({
+    id: String(item.id),
+    code: item.code || `SP${String(item.id).padStart(3, "0")}`,
+    name: item.name,
+    category: item.category || "Chưa phân loại",
+    price: Number(item.price),
+    stock: Number(item.quantity),
+    status: Number(item.quantity) > 0 ? "Đang bán" : "Hết hàng",
+    logoUrl: item.image || "",
+  });
+
+  // Lấy danh sách sản phẩm từ SQL Server thông qua API
+  const loadProducts = async () => {
+    try {
+      setLoading(true);
+      setApiError("");
+
+      const response = await fetch(`${API_URL}/products`, {
+        method: "GET",
+        headers: getHeaders(),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          Array.isArray(data.message)
+            ? data.message.join(", ")
+            : data.message || "Không thể tải danh sách sản phẩm."
+        );
+      }
+
+      if (!Array.isArray(data)) {
+        throw new Error("Dữ liệu sản phẩm từ Backend không hợp lệ.");
+      }
+
+      setProducts(data.map((item: ProductApi) => mapProduct(item)));
+    } catch (error) {
+      setApiError(
+        error instanceof Error
+          ? error.message
+          : "Không thể kết nối với Backend."
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProducts();
+  }, []);
+
+  // Tìm kiếm và lọc sản phẩm
   const filteredProducts = useMemo(() => {
     return products.filter((product) => {
       const keyword = search.toLowerCase().trim();
@@ -117,6 +126,7 @@ function Products() {
     });
   }, [products, search, statusFilter]);
 
+  // Thống kê
   const totalProducts = products.length;
 
   const activeProducts = products.filter(
@@ -136,6 +146,7 @@ function Products() {
     return new Intl.NumberFormat("vi-VN").format(price) + " đ";
   };
 
+  // Mở form thêm sản phẩm
   const openAddModal = () => {
     setEditingProduct(null);
 
@@ -151,6 +162,7 @@ function Products() {
     setShowModal(true);
   };
 
+  // Mở form chỉnh sửa
   const openEditModal = (product: Product) => {
     setEditingProduct(product);
 
@@ -166,12 +178,14 @@ function Products() {
     setShowModal(true);
   };
 
+  // Đóng form
   const closeModal = () => {
     setShowModal(false);
     setEditingProduct(null);
   };
 
-  const handleSave = () => {
+  // Thêm hoặc cập nhật sản phẩm qua API
+  const handleSave = async () => {
     if (
       !form.code.trim() ||
       !form.name.trim() ||
@@ -185,69 +199,105 @@ function Products() {
     const price = Number(form.price);
     const stock = Number(form.stock);
 
-    if (Number.isNaN(price) || price < 0) {
+    if (!Number.isFinite(price) || price < 0) {
       alert("Giá sản phẩm không hợp lệ.");
       return;
     }
 
-    if (Number.isNaN(stock) || stock < 0) {
-      alert("Số lượng tồn kho không hợp lệ.");
+    if (!Number.isInteger(stock) || stock < 0) {
+      alert("Số lượng tồn kho phải là số nguyên không âm.");
       return;
     }
 
-    const status: Product["status"] =
-      stock > 0 ? "Đang bán" : "Hết hàng";
+    const productData = {
+      code: form.code.trim(),
+      name: form.name.trim(),
+      category: form.category,
+      price,
+      quantity: stock,
+      image: form.logoUrl.trim() || null,
+    };
 
-    if (editingProduct) {
-      setProducts((currentProducts) =>
-        currentProducts.map((product) =>
-          product.id === editingProduct.id
-            ? {
-                ...product,
-                code: form.code.trim(),
-                name: form.name.trim(),
-                category: form.category,
-                price,
-                stock,
-                status,
-                logoUrl: form.logoUrl.trim(),
-              }
-            : product
-        )
+    try {
+      setSaving(true);
+
+      const isEditing = Boolean(editingProduct);
+
+      const url = isEditing
+        ? `${API_URL}/products/${editingProduct!.id}`
+        : `${API_URL}/products`;
+
+      const response = await fetch(url, {
+        method: isEditing ? "PATCH" : "POST",
+        headers: getHeaders(),
+        body: JSON.stringify(productData),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          Array.isArray(data.message)
+            ? data.message.join(", ")
+            : data.message || "Không thể lưu sản phẩm."
+        );
+      }
+
+      await loadProducts();
+
+      closeModal();
+
+      alert(
+        isEditing
+          ? "Cập nhật sản phẩm thành công!"
+          : "Thêm sản phẩm thành công!"
       );
-    } else {
-      const newProduct: Product = {
-        id: Date.now().toString(),
-        code: form.code.trim(),
-        name: form.name.trim(),
-        category: form.category,
-        price,
-        stock,
-        status,
-        logoUrl: form.logoUrl.trim(),
-      };
-
-      setProducts((currentProducts) => [
-        ...currentProducts,
-        newProduct,
-      ]);
+    } catch (error) {
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Có lỗi xảy ra khi lưu sản phẩm."
+      );
+    } finally {
+      setSaving(false);
     }
-
-    closeModal();
   };
 
-  const handleDelete = (product: Product) => {
+  // Xóa sản phẩm qua API
+  const handleDelete = async (product: Product) => {
     const confirmDelete = window.confirm(
       `Bạn có chắc muốn xóa sản phẩm "${product.name}" không?`
     );
 
     if (!confirmDelete) return;
 
-    setProducts((currentProducts) =>
-      currentProducts.filter(
-        (item) => item.id !== product.id
-      )
-    );
+    try {
+      const response = await fetch(
+        `${API_URL}/products/${product.id}`,
+        {
+          method: "DELETE",
+          headers: getHeaders(),
+        }
+      );
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          data.message || "Không thể xóa sản phẩm."
+        );
+      }
+
+      await loadProducts();
+
+      alert("Xóa sản phẩm thành công!");
+    } catch (error) {
+      alert(
+        error instanceof Error
+          ? error.message
+          : "Có lỗi xảy ra khi xóa sản phẩm."
+      );
+    }
   };
 
   return (
@@ -279,11 +329,26 @@ function Products() {
         </button>
       </div>
 
+      {/* THÔNG BÁO LỖI */}
+      {apiError && (
+        <div className="login-error">
+          {apiError}
+          <button
+            onClick={loadProducts}
+            style={{
+              marginLeft: "12px",
+              cursor: "pointer",
+            }}
+          >
+            Thử lại
+          </button>
+        </div>
+      )}
+
       {/* SUMMARY */}
       <div className="summary-grid">
         <div className="summary-card">
           <div className="summary-card-icon blue">◈</div>
-
           <div>
             <span>Tổng sản phẩm</span>
             <strong>{totalProducts}</strong>
@@ -292,7 +357,6 @@ function Products() {
 
         <div className="summary-card">
           <div className="summary-card-icon green">✓</div>
-
           <div>
             <span>Đang bán</span>
             <strong>{activeProducts}</strong>
@@ -301,7 +365,6 @@ function Products() {
 
         <div className="summary-card">
           <div className="summary-card-icon red">!</div>
-
           <div>
             <span>Hết hàng</span>
             <strong>{outOfStockProducts}</strong>
@@ -310,7 +373,6 @@ function Products() {
 
         <div className="summary-card">
           <div className="summary-card-icon cyan">▤</div>
-
           <div>
             <span>Tồn kho</span>
             <strong>{totalStock}</strong>
@@ -344,9 +406,7 @@ function Products() {
             <select
               className="products-filter-select"
               value={statusFilter}
-              onChange={(e) =>
-                setStatusFilter(e.target.value)
-              }
+              onChange={(e) => setStatusFilter(e.target.value)}
             >
               <option>Tất cả</option>
               <option>Đang bán</option>
@@ -371,12 +431,15 @@ function Products() {
             </thead>
 
             <tbody>
-              {filteredProducts.length === 0 ? (
+              {loading ? (
                 <tr>
-                  <td
-                    colSpan={7}
-                    className="products-empty"
-                  >
+                  <td colSpan={7} className="products-empty">
+                    Đang tải dữ liệu sản phẩm...
+                  </td>
+                </tr>
+              ) : filteredProducts.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="products-empty">
                     Không tìm thấy sản phẩm phù hợp.
                   </td>
                 </tr>
@@ -391,8 +454,7 @@ function Products() {
                             alt={product.name}
                             className="product-table-logo"
                             onError={(e) => {
-                              e.currentTarget.style.display =
-                                "none";
+                              e.currentTarget.style.display = "none";
                             }}
                           />
                         ) : (
@@ -403,10 +465,7 @@ function Products() {
 
                         <div>
                           <strong>{product.name}</strong>
-
-                          <span>
-                            Sản phẩm nước
-                          </span>
+                          <span>Sản phẩm nước</span>
                         </div>
                       </div>
                     </td>
@@ -448,9 +507,7 @@ function Products() {
                       <div className="product-actions">
                         <button
                           className="table-action edit"
-                          onClick={() =>
-                            openEditModal(product)
-                          }
+                          onClick={() => openEditModal(product)}
                           title="Chỉnh sửa"
                         >
                           ✎
@@ -458,9 +515,7 @@ function Products() {
 
                         <button
                           className="table-action delete"
-                          onClick={() =>
-                            handleDelete(product)
-                          }
+                          onClick={() => handleDelete(product)}
                           title="Xóa"
                         >
                           ×
@@ -480,7 +535,7 @@ function Products() {
         <div
           className="modal-overlay"
           onMouseDown={(e) => {
-            if (e.target === e.currentTarget) {
+            if (e.target === e.currentTarget && !saving) {
               closeModal();
             }
           }}
@@ -489,9 +544,7 @@ function Products() {
             <div className="modal-header">
               <div>
                 <span className="modal-eyebrow">
-                  {editingProduct
-                    ? "CẬP NHẬT"
-                    : "SẢN PHẨM MỚI"}
+                  {editingProduct ? "CẬP NHẬT" : "SẢN PHẨM MỚI"}
                 </span>
 
                 <h2>
@@ -504,6 +557,7 @@ function Products() {
               <button
                 className="modal-close"
                 onClick={closeModal}
+                disabled={saving}
               >
                 ×
               </button>
@@ -521,8 +575,7 @@ function Products() {
                         src={form.logoUrl}
                         alt="Logo xem trước"
                         onError={(e) => {
-                          e.currentTarget.style.display =
-                            "none";
+                          e.currentTarget.style.display = "none";
                         }}
                       />
                     ) : (
@@ -531,10 +584,7 @@ function Products() {
                   </div>
 
                   <div className="product-logo-upload-info">
-                    <strong>
-                      URL hình ảnh sản phẩm
-                    </strong>
-
+                    <strong>URL hình ảnh sản phẩm</strong>
                     <span>
                       Dán đường dẫn ảnh logo vào ô bên dưới.
                     </span>
@@ -652,6 +702,7 @@ function Products() {
               <button
                 className="secondary-button"
                 onClick={closeModal}
+                disabled={saving}
               >
                 Hủy
               </button>
@@ -659,10 +710,13 @@ function Products() {
               <button
                 className="primary-button"
                 onClick={handleSave}
+                disabled={saving}
               >
-                {editingProduct
-                  ? "Lưu thay đổi"
-                  : "Thêm sản phẩm"}
+                {saving
+                  ? "Đang lưu..."
+                  : editingProduct
+                    ? "Lưu thay đổi"
+                    : "Thêm sản phẩm"}
               </button>
             </div>
           </div>

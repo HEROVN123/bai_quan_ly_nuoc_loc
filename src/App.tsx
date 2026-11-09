@@ -18,14 +18,19 @@ import Employees from "./pages/Employees";
 
 import MainLayout from "./layouts/MainLayout";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
+import ForgotPassword from "./pages/ForgotPassword";
 
 function App() {
   return (
     <BrowserRouter>
       <Routes>
         {/* Trang công khai */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route
+            path="/forgot-password"
+            element={<ForgotPassword />}
+          />
 
         {/* Các trang cần đăng nhập */}
         <Route element={<ProtectedRoute />}>
