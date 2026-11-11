@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -22,6 +23,15 @@ interface RevenueDay {
   total: number;
 }
 
+interface InventoryAlert {
+  id: number;
+  code: string;
+  product: string;
+  stock: number;
+  minStock: number;
+  unit: string;
+}
+
 function Header() {
   const navigate = useNavigate();
 
@@ -32,6 +42,81 @@ function Header() {
   const [loadingRevenue, setLoadingRevenue] = useState(false);
   const [revenueError, setRevenueError] = useState("");
 
+  const [inventoryAlerts, setInventoryAlerts] = useState<InventoryAlert[]>([]);
+  const [loadingNotifications, setLoadingNotifications] = useState(false);
+  const [notificationError, setNotificationError] = useState("");
+
+  // Lấy thông báo tồn kho từ API
+  useEffect(() => {
+    if (!showNotifications) return;
+
+    const controller = new AbortController();
+
+    const fetchInventoryAlerts = async () => {
+      try {
+        setLoadingNotifications(true);
+        setNotificationError("");
+
+        const token = localStorage.getItem("accessToken");
+
+        const response = await fetch(`${API_URL}/inventory`, {
+          method: "GET",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          throw new Error("Không thể tải thông báo kho hàng.");
+        }
+
+        const data = await response.json();
+
+        if (!Array.isArray(data)) {
+          throw new Error("Dữ liệu kho hàng không hợp lệ.");
+        }
+
+        const alerts: InventoryAlert[] = data
+          .map((item: any) => ({
+            id: Number(item.id),
+            code: String(item.code ?? ""),
+            product: String(item.product ?? ""),
+            stock: Number(item.stock),
+            minStock: Number(item.minStock),
+            unit: String(item.unit ?? ""),
+          }))
+          .filter(
+            (item) =>
+              Number.isFinite(item.stock) &&
+              Number.isFinite(item.minStock) &&
+              item.stock <= item.minStock
+          );
+
+        setInventoryAlerts(alerts);
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") {
+          return;
+        }
+
+        setNotificationError(
+          error instanceof Error
+            ? error.message
+            : "Không thể tải thông báo."
+        );
+      } finally {
+        if (!controller.signal.aborted) {
+          setLoadingNotifications(false);
+        }
+      }
+    };
+
+    fetchInventoryAlerts();
+
+    return () => controller.abort();
+  }, [showNotifications]);
+
   // Lấy ngày theo giờ địa phương
   const getStartOfDay = (date: Date) => {
     const result = new Date(date);
@@ -39,7 +124,7 @@ function Header() {
     return result;
   };
 
-  // Đọc ngày dd/MM/yyyy hoặc yyyy-MM-dd
+  // Đọc ngày dd/MM/yyyy hoặc yyyy-MM-dd hoặc ISO datetime
   const parseOrderDate = (value?: string): Date | null => {
     if (!value) return null;
 
@@ -69,9 +154,7 @@ function Header() {
     }
 
     // Định dạng yyyy-MM-dd hoặc ISO datetime
-    const isoDate = text.match(
-      /^(\d{4})-(\d{2})-(\d{2})/
-    );
+    const isoDate = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
 
     if (isoDate) {
       const year = Number(isoDate[1]);
@@ -146,9 +229,7 @@ function Header() {
           method: "GET",
           headers: {
             "Content-Type": "application/json",
-            ...(token
-              ? { Authorization: `Bearer ${token}` }
-              : {}),
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
           },
           signal: controller.signal,
         });
@@ -183,9 +264,7 @@ function Header() {
 
     fetchOrders();
 
-    return () => {
-      controller.abort();
-    };
+    return () => controller.abort();
   }, [showRevenue]);
 
   // Tính toán doanh thu
@@ -244,22 +323,14 @@ function Header() {
     const weekRevenue = completedOrders
       .filter((order) => {
         const date = getStartOfDay(order.parsedDate!);
-
-        return (
-          date >= startOfWeek &&
-          date <= today
-        );
+        return date >= startOfWeek && date <= today;
       })
       .reduce((sum, order) => sum + order.amount, 0);
 
     const monthRevenue = completedOrders
       .filter((order) => {
         const date = getStartOfDay(order.parsedDate!);
-
-        return (
-          date >= startOfMonth &&
-          date <= today
-        );
+        return date >= startOfMonth && date <= today;
       })
       .reduce((sum, order) => sum + order.amount, 0);
 
@@ -283,19 +354,19 @@ function Header() {
     // Dữ liệu biểu đồ 7 ngày gần nhất
     const chartDays: RevenueDay[] = [];
 
+    const weekdayLabels = [
+      "CN",
+      "T2",
+      "T3",
+      "T4",
+      "T5",
+      "T6",
+      "T7",
+    ];
+
     for (let i = 6; i >= 0; i--) {
       const date = new Date(today);
       date.setDate(today.getDate() - i);
-
-      const weekdayLabels = [
-        "CN",
-        "T2",
-        "T3",
-        "T4",
-        "T5",
-        "T6",
-        "T7",
-      ];
 
       chartDays.push({
         date,
@@ -334,7 +405,6 @@ function Header() {
           <span className="header-welcome">
             Chào buổi sáng,
           </span>
-
           <h1>Hệ thống quản lý 👋</h1>
         </div>
       </div>
@@ -343,12 +413,10 @@ function Header() {
         {/* SEARCH */}
         <div className="header-search">
           <span className="header-search-icon">⌕</span>
-
           <input
             type="text"
             placeholder="Tìm kiếm..."
           />
-
           <span className="search-shortcut">
             Ctrl K
           </span>
@@ -358,18 +426,19 @@ function Header() {
         <div className="notification-wrapper">
           <button
             className="notification-button"
-            onClick={() =>
-              setShowNotifications(!showNotifications)
-            }
+            type="button"
+            onClick={() => setShowNotifications(!showNotifications)}
             aria-label="Thông báo"
           >
-            <span className="notification-icon">
-              ♧
-            </span>
+            <span className="notification-icon">♧</span>
 
-            <span className="notification-badge">
-              3
-            </span>
+            {inventoryAlerts.length > 0 && (
+              <span className="notification-badge">
+                {inventoryAlerts.length > 99
+                  ? "99+"
+                  : inventoryAlerts.length}
+              </span>
+            )}
           </button>
 
           {showNotifications && (
@@ -377,71 +446,85 @@ function Header() {
               <div className="notification-header">
                 <div>
                   <h3>Thông báo</h3>
-
-                  <span>3 thông báo mới</span>
+                  <span>
+                    {loadingNotifications
+                      ? "Đang kiểm tra kho hàng..."
+                      : `${inventoryAlerts.length} cảnh báo kho hàng`}
+                  </span>
                 </div>
 
                 <button
-                  onClick={() =>
-                    setShowNotifications(false)
-                  }
+                  type="button"
+                  onClick={() => setShowNotifications(false)}
                 >
                   ×
                 </button>
               </div>
 
               <div className="notification-list">
-                <div className="notification-item">
-                  <div className="notification-item-icon inventory">
-                    📦
+                {loadingNotifications ? (
+                  <div className="notification-empty">
+                    Đang kiểm tra tình trạng kho hàng...
                   </div>
+                ) : notificationError ? (
+                  <div className="notification-empty">
+                    {notificationError}
+                  </div>
+                ) : inventoryAlerts.length > 0 ? (
+                  inventoryAlerts.map((item) => {
+                    const isOutOfStock = item.stock === 0;
 
-                  <div>
-                    <strong>Kho hàng sắp hết</strong>
+                    return (
+                      <div
+                        className="notification-item"
+                        key={item.id}
+                      >
+                        <div
+                          className={`notification-item-icon ${
+                            isOutOfStock ? "system" : "inventory"
+                          }`}
+                        >
+                          {isOutOfStock ? "⚠" : "📦"}
+                        </div>
 
+                        <div>
+                          <strong>
+                            {isOutOfStock
+                              ? "Sản phẩm đã hết hàng"
+                              : "Kho hàng sắp hết"}
+                          </strong>
+
+                          <p>
+                            {item.product} ({item.code}) còn{" "}
+                            {item.stock} {item.unit}. Mức tối thiểu:{" "}
+                            {item.minStock} {item.unit}.
+                          </p>
+
+                          <span>Cần kiểm tra kho hàng</span>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="notification-empty">
+                    <span>✓</span>
+                    <strong>Kho hàng đang ổn định</strong>
                     <p>
-                      2 sản phẩm đang dưới mức tồn tối thiểu.
+                      Không có sản phẩm nào cần cảnh báo.
                     </p>
-
-                    <span>5 phút trước</span>
                   </div>
-                </div>
-
-                <div className="notification-item">
-                  <div className="notification-item-icon order">
-                    🛒
-                  </div>
-
-                  <div>
-                    <strong>Có đơn hàng mới</strong>
-
-                    <p>
-                      Đơn hàng #DH0012 đang chờ xử lý.
-                    </p>
-
-                    <span>18 phút trước</span>
-                  </div>
-                </div>
-
-                <div className="notification-item">
-                  <div className="notification-item-icon system">
-                    ✓
-                  </div>
-
-                  <div>
-                    <strong>Hệ thống hoạt động tốt</strong>
-
-                    <p>
-                      Dữ liệu đã được đồng bộ thành công.
-                    </p>
-
-                    <span>1 giờ trước</span>
-                  </div>
-                </div>
+                )}
               </div>
 
-              <button className="notification-footer">
-                Xem tất cả thông báo
+              <button
+                className="notification-footer"
+                type="button"
+                onClick={() => {
+                  setShowNotifications(false);
+                  navigate("/thong-bao");
+                }}
+              >
+                Xem tất cả thông báo →
               </button>
             </div>
           )}
@@ -457,13 +540,10 @@ function Header() {
                 ? "revenue-button active"
                 : "revenue-button"
             }
-            onClick={() =>
-              setShowRevenue(!showRevenue)
-            }
+            type="button"
+            onClick={() => setShowRevenue(!showRevenue)}
           >
-            <span className="revenue-button-icon">
-              ↗
-            </span>
+            <span className="revenue-button-icon">↗</span>
 
             <span className="revenue-button-text">
               Xem doanh thu
@@ -498,9 +578,8 @@ function Header() {
 
                 <button
                   className="revenue-panel-close"
-                  onClick={() =>
-                    setShowRevenue(false)
-                  }
+                  type="button"
+                  onClick={() => setShowRevenue(false)}
                 >
                   ×
                 </button>
@@ -513,7 +592,9 @@ function Header() {
               ) : revenueError ? (
                 <div className="revenue-error">
                   {revenueError}
+
                   <button
+                    type="button"
                     onClick={() => {
                       setShowRevenue(false);
                       setTimeout(() => setShowRevenue(true), 0);
@@ -549,7 +630,6 @@ function Header() {
                   <div className="revenue-stats">
                     <div className="revenue-stat">
                       <span>Tuần này</span>
-
                       <strong>
                         {formatShortCurrency(revenueData.weekRevenue)} đ
                       </strong>
@@ -557,7 +637,6 @@ function Header() {
 
                     <div className="revenue-stat">
                       <span>Tháng này</span>
-
                       <strong>
                         {formatShortCurrency(revenueData.monthRevenue)} đ
                       </strong>
@@ -565,7 +644,6 @@ function Header() {
 
                     <div className="revenue-stat">
                       <span>Đơn hôm nay</span>
-
                       <strong>
                         {revenueData.todayOrderCount}
                       </strong>
@@ -573,7 +651,6 @@ function Header() {
 
                     <div className="revenue-stat">
                       <span>Giá trị TB</span>
-
                       <strong>
                         {formatShortCurrency(revenueData.averageOrder)} đ
                       </strong>
@@ -641,6 +718,7 @@ function Header() {
                     </span>
 
                     <button
+                      type="button"
                       onClick={() => {
                         setShowRevenue(false);
                         navigate("/orders");

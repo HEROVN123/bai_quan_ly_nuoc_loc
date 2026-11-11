@@ -15,6 +15,7 @@ import Inventory from "./pages/Inventory";
 import Profile from "./pages/Profile";
 import Register from "./pages/Register";
 import Employees from "./pages/Employees";
+import Notifications from "./pages/Notifications";
 
 import MainLayout from "./layouts/MainLayout";
 import ProtectedRoute from "./components/auth/ProtectedRoute";
@@ -42,6 +43,7 @@ function App() {
             <Route path="/inventory" element={<Inventory />} />
             <Route path="/profile" element={<Profile />} />
             <Route path="/employees" element={<Employees />} />
+            <Route path="/thong-bao" element={<Notifications />} />
           </Route>
         </Route>
 
